@@ -1,0 +1,199 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte de seguridad · mi-tienda</title><style>
+:root{--bg:#f6f7f9;--card:#fff;--txt:#1d2433;--sub:#5b6476;--line:#e4e7ec;--code:#f2f4f7;
+--crit:#d92d20;--crit-bg:#fef3f2;--alto:#e8590c;--alto-bg:#fff4ed;--medio:#b54708;--medio-bg:#fffaeb;
+--bajo:#1570ef;--bajo-bg:#eff8ff;--ok:#079455;--ok-bg:#ecfdf3;--radius:14px}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b24;--txt:#e6e9ef;--sub:#98a2b3;--line:#262c38;
+--code:#1f2430;--crit:#f97066;--crit-bg:#2a1414;--alto:#fd853a;--alto-bg:#2a1a10;--medio:#fdb022;--medio-bg:#2a2210;
+--bajo:#53b1fd;--bajo-bg:#102033;--ok:#32d583;--ok-bg:#0f2a1d}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:40px 20px 64px}
+header .marca{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);font-weight:600}
+h1{font-size:30px;line-height:1.2;margin:6px 0 4px}
+.meta{color:var(--sub);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px;margin-top:20px}
+.veredicto{display:flex;gap:16px;align-items:flex-start}
+.punto{flex:0 0 14px;height:14px;border-radius:50%;margin-top:9px}
+.veredicto h2{margin:0;font-size:22px}
+.veredicto p{margin:6px 0 0;color:var(--sub)}
+.barra{display:flex;height:12px;border-radius:99px;overflow:hidden;background:var(--line);margin:22px 0 16px}
+.barra span{display:block;height:100%}
+.conteos{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.conteo{border-radius:10px;padding:12px 14px;background:var(--code)}
+.conteo b{display:block;font-size:26px;line-height:1.1}
+.conteo small{color:var(--sub);font-size:13px}
+.hoy{border-color:var(--crit);background:var(--crit-bg)}
+.hoy h2{margin:0 0 4px;font-size:18px;color:var(--crit)}
+.hoy p{margin:0 0 12px;color:var(--sub);font-size:14px}
+.hoy ul{margin:0;padding-left:20px}.hoy li{margin:4px 0}
+.seccion{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:40px 0 4px}
+.seccion h2{margin:0;font-size:20px}
+.filtros{display:flex;gap:6px;flex-wrap:wrap}
+.filtros button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--sub);
+border-radius:99px;padding:4px 12px;cursor:pointer}
+.filtros button[aria-pressed=true]{background:var(--txt);color:var(--bg);border-color:var(--txt)}
+.vuln{border-left:5px solid var(--c);padding:22px 24px}
+.cabeza{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
+.vuln h3{margin:0;font-size:18px;line-height:1.35}
+.pill{flex:0 0 auto;font-size:12px;font-weight:700;letter-spacing:.03em;padding:3px 10px;border-radius:99px;
+color:var(--c);background:var(--cbg)}
+.donde{display:inline-block;margin-top:8px;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:3px 8px;border-radius:6px;color:var(--sub);word-break:break-all}
+.dos{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:16px}
+.dos h4{margin:0 0 4px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--sub)}
+.dos p{margin:0}
+details{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;font-weight:600;font-size:15px}
+summary::marker{color:var(--sub)}
+ol{margin:10px 0 0;padding-left:22px}ol li{margin:4px 0}
+.prompt{margin-top:16px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.prompt-top{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 12px;
+background:var(--code);font-size:13px;color:var(--sub)}
+.prompt-top b{color:var(--txt);font-weight:600}
+.copiar{font:inherit;font-size:13px;font-weight:600;border:0;border-radius:8px;padding:6px 12px;cursor:pointer;
+background:var(--txt);color:var(--bg)}
+.prompt pre{margin:0;padding:14px;white-space:pre-wrap;word-break:break-word;max-height:132px;overflow:auto;
+font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card)}
+.lista{list-style:none;margin:0;padding:0}
+.lista li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.lista li:last-child{border-bottom:0}
+.ic{flex:0 0 22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;margin-top:1px}
+.ic.ok{background:var(--ok-bg);color:var(--ok)}
+.check label{display:flex;gap:10px;cursor:pointer}
+.check input{width:18px;height:18px;margin-top:3px;accent-color:var(--ok);flex:0 0 auto}
+.check input:checked+span{text-decoration:line-through;color:var(--sub)}
+.limites{font-size:14px;color:var(--sub)}
+.vacio{text-align:center;color:var(--sub);padding:28px}
+footer{margin-top:40px;font-size:13px;color:var(--sub);text-align:center}
+@media (max-width:640px){.wrap{padding:24px 16px 48px}h1{font-size:24px}.conteos{grid-template-columns:repeat(2,1fr)}
+.dos{grid-template-columns:1fr}.card,.vuln{padding:18px}}
+@media print{body{background:#fff}.filtros,.copiar{display:none}details{display:block}.prompt pre{max-height:none}
+.card{break-inside:avoid}}
+</style></head><body><div class="wrap"><header><div class="marca">Reporte de seguridad</div><h1>mi-tienda</h1><div class="meta">2026-10-05 · Código del proyecto · Sitio publicado: https://mitienda-ejemplo.com</div></header><section class="card"><div class="veredicto"><span class="punto" style="background:var(--crit)"></span><div><h2>No la publiques todavía</h2><p>Tu tienda tiene 6 problemas críticos: hoy cualquier persona podría ver los datos de tus clientes, cambiar precios o marcar pedidos como pagados sin pagar. Primero cambia las llaves expuestas y después arregla los problemas en el orden de esta lista.</p></div></div><div class="barra" role="img" aria-label="9 problemas: 6 crítico, 2 alto, 0 medio, 1 bajo"><span style="width:66.67%;background:var(--crit)"></span><span style="width:22.22%;background:var(--alto)"></span><span style="width:11.11%;background:var(--bajo)"></span></div><div class="conteos"><div class="conteo" style="box-shadow:inset 3px 0 0 var(--crit)"><b>6</b><small>Críticos</small></div><div class="conteo" style="box-shadow:inset 3px 0 0 var(--alto)"><b>2</b><small>Altos</small></div><div class="conteo" style="box-shadow:inset 3px 0 0 var(--medio)"><b>0</b><small>Medios</small></div><div class="conteo" style="box-shadow:inset 3px 0 0 var(--bajo)"><b>1</b><small>Bajo</small></div></div></section><section class="card hoy"><h2>Haz esto hoy: cambia estas llaves</h2><p>Estuvieron expuestas. Borrarlas del código no basta: ya pudieron ser copiadas. Genera una nueva en cada servicio, desactiva la vieja y actualízala en tu hosting.</p><ul><li><b>Supabase (service_role)</b>: Supabase → Project Settings → API → generar nuevas llaves</li><li><b>OpenAI</b>: platform.openai.com → API keys → borrar y crear una nueva</li><li><b>Stripe (sk_live)</b>: dashboard.stripe.com → Developers → API keys → Roll key</li></ul></section><div class="seccion"><h2>Problemas encontrados</h2><div class="filtros"><button data-f="todos" aria-pressed="true">Todos · 9</button><button data-f="critica" aria-pressed="false">Crítico · 6</button><button data-f="alta" aria-pressed="false">Alto · 2</button><button data-f="baja" aria-pressed="false">Bajo · 1</button></div></div><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>1. La llave maestra de tu base de datos está en la página</h3><span class="pill">Crítico</span></div><span class="donde">lib/supabaseClient.ts:5</span><div class="dos"><div><h4>Qué pasa</h4><p>La llave service_role de Supabase está escrita en un archivo que descarga cada visitante. Esa llave se salta todas las reglas de seguridad de la base de datos.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Descargar los correos y direcciones de todos tus clientes, cambiar precios o borrar todos los pedidos.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Genera llaves nuevas en Supabase (la vieja ya no sirve después).</li><li>En el navegador usa solo la anon key.</li><li>Mueve las consultas de administrador a una ruta del servidor que lea la service_role desde una variable de entorno.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-1">Copiar</button></div><pre id="prompt-1">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: La llave maestra de tu base de datos está en la página
+DÓNDE: lib/supabaseClient.ts:5
+QUÉ PASA: La llave service_role de Supabase está escrita en un archivo que descarga cada visitante. Esa llave se salta todas las reglas de seguridad de la base de datos.
+
+QUÉ HAY QUE HACER:
+Quita la llave service_role de lib/supabaseClient.ts. El cliente del navegador debe usar solo NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY. Crea un cliente aparte solo para el servidor (con import &#x27;server-only&#x27;) que lea SUPABASE_SERVICE_ROLE_KEY de process.env, y úsalo únicamente en rutas de API o páginas de servidor.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>2. Tu archivo de llaves (.env) se puede descargar desde el sitio</h3><span class="pill">Crítico</span></div><span class="donde">https://mitienda-ejemplo.com/.env</span><div class="dos"><div><h4>Qué pasa</h4><p>El archivo con tus llaves secretas está publicado junto con la página.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Usar tu cuenta de Stripe y de OpenAI a tu nombre.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Cambia todas las llaves de ese archivo.</li><li>Bórralo del servidor.</li><li>Revisa cómo subes el sitio: nunca subas la carpeta completa del proyecto.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-2">Copiar</button></div><pre id="prompt-2">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Tu archivo de llaves (.env) se puede descargar desde el sitio
+DÓNDE: https://mitienda-ejemplo.com/.env
+QUÉ PASA: El archivo con tus llaves secretas está publicado junto con la página.
+
+QUÉ HAY QUE HACER:
+Revisa la configuración de despliegue para que los archivos .env* y la carpeta .git nunca se publiquen. Si se sube por FTP o como sitio estático, publica solo la carpeta de salida del build.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>3. Cualquiera puede entrar a tu panel de administración</h3><span class="pill">Crítico</span></div><span class="donde">app/admin/page.tsx</span><div class="dos"><div><h4>Qué pasa</h4><p>La página /admin no comprueba quién entra. El middleware solo protege /dashboard.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Ver los pedidos y correos de tus clientes y borrar pedidos, sin tener cuenta.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Haz que /admin verifique en el servidor que hay sesión y que el usuario es administrador.</li><li>Si no lo es, redirige a /login.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-3">Copiar</button></div><pre id="prompt-3">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Cualquiera puede entrar a tu panel de administración
+DÓNDE: app/admin/page.tsx
+QUÉ PASA: La página /admin no comprueba quién entra. El middleware solo protege /dashboard.
+
+QUÉ HAY QUE HACER:
+Convierte app/admin/page.tsx en un componente de servidor: obtén el usuario con supabase.auth.getUser(), verifica is_admin en la tabla profiles y redirige a /login si no cumple. Mueve el borrado de pedidos a una server action o ruta de API que repita esa verificación.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>4. El cliente puede elegir cuánto pagar</h3><span class="pill">Crítico</span></div><span class="donde">app/api/checkout/route.ts:9</span><div class="dos"><div><h4>Qué pasa</h4><p>El precio del cobro viene de lo que envía el navegador.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Comprar un producto de $100 pagando $0,01.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>El navegador solo debe enviar el id del producto y la cantidad.</li><li>El servidor busca el precio en la base de datos.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-4">Copiar</button></div><pre id="prompt-4">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: El cliente puede elegir cuánto pagar
+DÓNDE: app/api/checkout/route.ts:9
+QUÉ PASA: El precio del cobro viene de lo que envía el navegador.
+
+QUÉ HAY QUE HACER:
+En app/api/checkout/route.ts recibe solo productId y quantity. Busca name y price_cents en la tabla products, valida que quantity sea un entero entre 1 y 10 y usa ese precio en unit_amount.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>5. Se pueden marcar pedidos como pagados sin pagar</h3><span class="pill">Crítico</span></div><span class="donde">app/api/webhooks/stripe/route.ts</span><div class="dos"><div><h4>Qué pasa</h4><p>El aviso de pago no verifica que realmente venga de Stripe.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Enviar un aviso falso y recibir productos sin pagar.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Verifica la firma de Stripe antes de tocar la base de datos.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-5">Copiar</button></div><pre id="prompt-5">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Se pueden marcar pedidos como pagados sin pagar
+DÓNDE: app/api/webhooks/stripe/route.ts
+QUÉ PASA: El aviso de pago no verifica que realmente venga de Stripe.
+
+QUÉ HAY QUE HACER:
+En el webhook lee el cuerpo con await request.text() y valida con stripe.webhooks.constructEvent(body, firma, process.env.STRIPE_WEBHOOK_SECRET). Si falla, responde 400 sin modificar nada.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="critica" style="--c:var(--crit);--cbg:var(--crit-bg)"><div class="cabeza"><h3>6. La tabla de pedidos está abierta a cualquiera</h3><span class="pill">Crítico</span></div><span class="donde">supabase/migrations/20240101000000_init.sql</span><div class="dos"><div><h4>Qué pasa</h4><p>La tabla orders no tiene activada la seguridad por filas (RLS) y la tabla products deja modificar a cualquiera.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Leer, modificar o borrar todos los pedidos y cambiar los precios de tus productos.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Activa RLS en todas las tablas.</li><li>Deja que cada cliente vea solo sus pedidos.</li><li>Que solo un administrador pueda editar productos.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-6">Copiar</button></div><pre id="prompt-6">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: La tabla de pedidos está abierta a cualquiera
+DÓNDE: supabase/migrations/20240101000000_init.sql
+QUÉ PASA: La tabla orders no tiene activada la seguridad por filas (RLS) y la tabla products deja modificar a cualquiera.
+
+QUÉ HAY QUE HACER:
+Crea una migración que active RLS en orders, agregue una política de select con auth.uid() = user_id, reemplace la política products_all por lectura pública (select using true) y escritura solo para administradores (is_admin en profiles).
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="alta" style="--c:var(--alto);--cbg:var(--alto-bg)"><div class="cabeza"><h3>7. Tu llave de OpenAI llega al navegador</h3><span class="pill">Alto</span></div><span class="donde">app/components/AsistenteIA.tsx:9</span><div class="dos"><div><h4>Qué pasa</h4><p>La variable NEXT_PUBLIC_OPENAI_API_KEY se copia dentro del JavaScript público.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Gastar tu saldo de OpenAI con tu llave.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Cambia la llave en OpenAI.</li><li>Crea una ruta /api/chat en el servidor que llame a OpenAI.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-7">Copiar</button></div><pre id="prompt-7">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Tu llave de OpenAI llega al navegador
+DÓNDE: app/components/AsistenteIA.tsx:9
+QUÉ PASA: La variable NEXT_PUBLIC_OPENAI_API_KEY se copia dentro del JavaScript público.
+
+QUÉ HAY QUE HACER:
+Crea app/api/chat/route.ts que llame a OpenAI usando process.env.OPENAI_API_KEY (sin prefijo NEXT_PUBLIC_), con un límite de largo de mensaje. Cambia AsistenteIA.tsx para que llame a /api/chat y elimina NEXT_PUBLIC_OPENAI_API_KEY.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="alta" style="--c:var(--alto);--cbg:var(--alto-bg)"><div class="cabeza"><h3>8. Tu versión de Next.js tiene una falla conocida</h3><span class="pill">Alto</span></div><span class="donde">package.json (next 14.1.0)</span><div class="dos"><div><h4>Qué pasa</h4><p>Esta versión permite saltarse el middleware con un truco conocido públicamente.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Entrar a páginas que creías protegidas.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Actualiza Next.js a la última versión.</li><li>Prueba la tienda y vuelve a publicar.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-8">Copiar</button></div><pre id="prompt-8">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Tu versión de Next.js tiene una falla conocida
+DÓNDE: package.json (next 14.1.0)
+QUÉ PASA: Esta versión permite saltarse el middleware con un truco conocido públicamente.
+
+QUÉ HAY QUE HACER:
+Actualiza next a la última versión estable de la rama 14 o superior, ejecuta npm audit fix y verifica que el build funcione.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><article class="card vuln" data-sev="baja" style="--c:var(--bajo);--cbg:var(--bajo-bg)"><div class="cabeza"><h3>9. Faltan protecciones extra del navegador</h3><span class="pill">Bajo</span></div><span class="donde">https://mitienda-ejemplo.com</span><div class="dos"><div><h4>Qué pasa</h4><p>El sitio no envía cabeceras de seguridad como X-Frame-Options.</p></div><div><h4>Qué podría hacer un atacante</h4><p>Facilita ataques como meter tu página dentro de otra para engañar clics.</p></div></div><details><summary>Cómo arreglarlo paso a paso</summary><ol><li>Agrega las cabeceras en next.config.js.</li></ol></details><div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · Claude Code, Hermes o Codex</span><button class="copiar" data-for="prompt-9">Copiar</button></div><pre id="prompt-9">Arregla este problema de seguridad en mi proyecto &quot;mi-tienda&quot;.
+
+PROBLEMA: Faltan protecciones extra del navegador
+DÓNDE: https://mitienda-ejemplo.com
+QUÉ PASA: El sitio no envía cabeceras de seguridad como X-Frame-Options.
+
+QUÉ HAY QUE HACER:
+Agrega en next.config.js una función headers() con Strict-Transport-Security, X-Content-Type-Options: nosniff, X-Frame-Options: DENY y Referrer-Policy: strict-origin-when-cross-origin para todas las rutas.
+
+REGLAS:
+- Lee primero los archivos involucrados y respeta cómo está hecho el proyecto.
+- No escribas llaves ni contraseñas en el código: usa variables de entorno y dime cuáles debo configurar.
+- Cambia solo lo necesario para este problema.
+- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.</pre></div></article><div class="seccion"><h2>Lo que está bien</h2></div><section class="card"><ul class="lista"><li><span class="ic ok">✓</span><span>La llave de Stripe del servidor se lee desde una variable de entorno.</span></li><li><span class="ic ok">✓</span><span>La tabla de clientes tiene RLS y cada cliente solo ve sus datos.</span></li></ul></section><div class="seccion"><h2>Revisa tú a mano</h2></div><section class="card"><ul class="lista check"><li><label><input type="checkbox"><span>Activa la verificación en dos pasos en tu correo, Supabase, Stripe, Vercel y GitHub.</span></label></li><li><label><input type="checkbox"><span>Confirma en Supabase → Database → Backups que hay copias automáticas.</span></label></li><li><label><input type="checkbox"><span>Ejecuta npm audit después de actualizar las dependencias.</span></label></li></ul></section><section class="card limites"><b>Límites de esta revisión.</b> No se pudo ejecutar npm audit porque no hay package-lock.json. Solo se revisó lo que está en el código y en la página pública. Ninguna revisión garantiza seguridad al 100%.</section><footer>Generado por el skill auditoria-seguridad-web · 2026-10-05</footer></div><script>
+document.querySelectorAll('.copiar').forEach(function(b){b.addEventListener('click',function(){
+var t=document.getElementById(b.dataset.for).textContent,ok=function(){var o=b.textContent;b.textContent='¡Copiado!';
+setTimeout(function(){b.textContent=o},1600)};
+if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(ok)}else{
+var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();
+try{document.execCommand('copy');ok()}catch(e){}document.body.removeChild(a)}})});
+var fs=document.querySelectorAll('.filtros button');fs.forEach(function(b){b.addEventListener('click',function(){
+fs.forEach(function(x){x.setAttribute('aria-pressed',x===b)});var f=b.dataset.f;
+document.querySelectorAll('.vuln').forEach(function(v){v.style.display=(f==='todos'||v.dataset.sev===f)?'':'none'})})});
+</script></body></html>
