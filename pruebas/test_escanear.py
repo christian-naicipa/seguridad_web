@@ -199,7 +199,8 @@ class PruebasServidor(unittest.TestCase):
                       "FIREWALL_INACTIVO", "USUARIO_UID0", "USUARIO_SIN_PASSWORD", "PROCESO_SOSPECHOSO", "CRON_SOSPECHOSO",
                       "LD_PRELOAD", "SERVICIO_SOSPECHOSO", "EJECUTABLE_EN_TMP", "NGINX_SIRVE_OCULTOS", "ENV_LEGIBLE",
                       "PARCHES_PENDIENTES", "REINICIO_PENDIENTE", "SIN_ACTUALIZACIONES_AUTO", "DISCO_LLENO",
-                      "CERTIFICADO_POR_VENCER", "SIN_BACKUP", "DOCKER_SOCKET_MONTADO", "NGINX_VERSION"]:
+                      "CERTIFICADO_POR_VENCER", "SIN_BACKUP", "DOCKER_SOCKET_MONTADO", "NGINX_VERSION",
+                      "PG_TRUST_REMOTO"]:
             self.assertIn(regla, reglas, "no detectó %s" % regla)
         self.assertEqual(reglas.count("DOCKER_BD_PUBLICA"), 1, "Redis en IPv4 e IPv6 es un solo problema")
         self.assertNotIn("CPU_ALTA", reglas, "el minero ya está reportado como proceso sospechoso")
@@ -272,6 +273,72 @@ class PruebasServidor(unittest.TestCase):
         self.assertIn("18.342", h)
         self.assertIn("ssh deploy@203.0.113.10", h)
         self.assertIn("NO cierres la sesión actual", h)
+
+
+class PruebasBasesDeDatos(unittest.TestCase):
+    """El diagnóstico depende del motor: RLS solo aplica cuando el navegador habla con la base (Supabase/PostgREST)."""
+
+    @classmethod
+    def setUpClass(cls):
+        subprocess.run([sys.executable, os.path.join(AQUI, "crear_apps.py")], check=True, capture_output=True)
+
+    def reglas(self, d):
+        return [h["regla"] for h in d["hallazgos"]]
+
+    def test_postgres_directo(self):
+        texto, d = escanear("api-postgres")
+        self.assertEqual(d["bases_de_datos"]["motores"], ["postgresql"])
+        r = self.reglas(d)
+        self.assertNotIn("SUPABASE_SIN_RLS", r, "en Postgres directo no se debe pedir RLS")
+        self.assertNotIn("BD_SIN_RLS", r)
+        self.assertEqual(r.count("SQL_INYECCION"), 2, "buscador y login; la consulta con $1 está bien")
+        for regla in ["SECRETO_EN_CODIGO", "BD_USUARIO_ADMIN", "BD_SIN_CIFRADO", "BD_PERMISOS_EXCESIVOS",
+                      "BD_PASSWORD_EN_SQL", "BD_PASSWORD_EN_COMPOSE", "BD_PUERTO_PUBLICADO"]:
+            self.assertIn(regla, r, "no detectó %s" % regla)
+        self.assertIn("RLS NO es la protección principal", d["bases_de_datos"]["modelo"])
+        for clave in ("SuperClave2024", "TiendaSegura99", "ClaveDelContenedor1"):
+            self.assertNotIn(clave, texto, "nunca debe mostrar una contraseña de base de datos")
+
+    def test_sqlserver(self):
+        texto, d = escanear("api-sqlserver")
+        self.assertEqual(d["bases_de_datos"]["motores"], ["sqlserver"])
+        r = self.reglas(d)
+        self.assertEqual(r.count("SQL_INYECCION"), 1, "la consulta con @id está bien")
+        for regla in ["BD_XP_CMDSHELL", "BD_PERMISOS_EXCESIVOS", "BD_CREDENCIALES_EN_CODIGO", "SECRETO_EN_CODIGO",
+                      "BD_USUARIO_ADMIN", "BD_SIN_CIFRADO", "BD_PASSWORD_EN_SQL"]:
+            self.assertIn(regla, r, "no detectó %s" % regla)
+        self.assertNotIn("SUPABASE_SIN_RLS", r)
+        self.assertTrue(any(m.startswith("SQL Server") for m in d["verificaciones_manuales"]))
+        for clave in ("Admin123!", "LoginDeLaApp2024"):
+            self.assertNotIn(clave, texto)
+
+    def test_postgres_seguro_sin_falsas_alarmas(self):
+        _, d = escanear("api-postgres-segura")
+        graves = [h for h in d["hallazgos"] if h["severidad"] in ("critica", "alta", "media")]
+        self.assertEqual(graves, [], "falsas alarmas en la API segura: %s" % graves)
+
+    def test_supabase_sigue_pidiendo_rls(self):
+        _, d = escanear("tienda-nextjs-supabase")
+        self.assertIn("Supabase", d["bases_de_datos"]["api_directa"])
+        self.assertIn("SUPABASE_SIN_RLS", self.reglas(d))
+
+    def test_reporte_oculta_password_de_bd(self):
+        import tempfile
+        sys.path.insert(0, AQUI)
+        from crear_apps import DB_URL_PG, ADO_SQLSERVER
+        datos = {"proyecto": "x", "hallazgos": [{"severidad": "alta", "titulo": "Credencial", "que_pasa": DB_URL_PG,
+                                                 "instrucciones_ia": ADO_SQLSERVER}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            entrada, salida = os.path.join(tmp, "h.json"), os.path.join(tmp, "r.html")
+            with open(entrada, "w", encoding="utf-8") as f:
+                json.dump(datos, f)
+            subprocess.run([sys.executable, os.path.join(SCRIPTS, "generar_reporte.py"), entrada, salida], check=True,
+                           capture_output=True)
+            with open(salida, encoding="utf-8") as f:
+                h = f.read()
+        self.assertNotIn("SuperClave2024", h)
+        self.assertNotIn("Admin123!", h)
+        self.assertIn("db.miempresa.com", h, "debe seguir mostrando a qué servidor apunta")
 
 
 if __name__ == "__main__":

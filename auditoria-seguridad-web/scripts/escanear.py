@@ -31,7 +31,7 @@ DIRS_IGNORADOS = {"node_modules", ".git", ".next", "dist", "build", "out", ".ver
                   "coverage", ".turbo", ".cache", ".svelte-kit", ".nuxt", ".output", "vendor",
                   "__pycache__", ".venv", "venv", ".expo", "ios", "android"}
 ARCHIVOS_IGNORADOS = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"}
-EXT_TEXTO = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro", ".html",
+EXT_TEXTO = {".js", ".cs", ".csproj", ".config", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro", ".html",
              ".htm", ".liquid", ".json", ".yml", ".yaml", ".toml", ".sql", ".rules", ".py", ".php",
              ".rb", ".go", ".sh", ".md", ".txt", ".ini", ".cfg", ".conf", ".xml", ".plist", ".gradle",
              ".properties", ".rs", ".java", ".kt", ".swift", ".dart"}
@@ -60,7 +60,14 @@ PATRONES_SECRETOS = [
     ("telegram", re.compile(r"\b\d{8,10}:AA[A-Za-z0-9_-]{33}\b"), "Token de bot de Telegram"),
     ("google_ai", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "Llave de Google (AIza...)"),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "Token JWT"),
+    ("db_url", re.compile(r"\b(?:postgres(?:ql)?|mysql|mariadb|mssql|sqlserver|mongodb(?:\+srv)?)://[^:/\s'\"@]+:[^@\s'\"/]+@[^\s'\"/:,;)]+"),
+     "Dirección de la base de datos con usuario y contraseña"),
+    ("sqlserver_conn", re.compile(r"(?i)(?:Server|Data Source)\s*=\s*[^;'\"\n]+;[^'\"\n]*?(?:Password|Pwd)\s*=\s*[^;'\"\n\s]{3,}"),
+     "Cadena de conexión de SQL Server con contraseña"),
 ]
+# Contraseñas de ejemplo que no cuentan como filtración (documentación, .env.example)
+PASSWORD_EJEMPLO = re.compile(r"^(?:password|pass|passwd|pwd|secret|contrase[nñ]a|changeme|your_?password|tu_?password|"
+                              r"mypassword|xxx+|\*+|\.\.\.)$", re.I)
 PLACEHOLDER = re.compile(r"xxx|your[_-]|tu[_-]|<|changeme|example|placeholder|\.\.\.|aqui|here", re.I)
 
 AUTH_INDICIOS = re.compile(
@@ -73,8 +80,16 @@ AUTH_INDICIOS = re.compile(
 RATE_LIMIT = re.compile(r"rateLimit|ratelimit|rate-limit|@upstash/ratelimit|slowDown|throttle", re.I)
 
 
+def password_de_bd(s):
+    m = re.search(r"://[^:/\s'\"@]+:([^@\s'\"/]+)@", s) or re.search(r"(?i)(?:Password|Pwd)\s*=\s*([^;'\"\n\s]+)", s)
+    return m.group(1) if m else None
+
+
 def enmascarar(s):
     s = s.strip()
+    pw = password_de_bd(s)
+    if pw:  # credencial de base de datos: se muestra a qué servidor apunta, nunca la contraseña
+        return s.replace(pw, "****")
     if len(s) <= 12:
         return s[:3] + "…"
     return s[:8] + "…" + s[-4:]
@@ -103,6 +118,7 @@ class Escaner:
         self.deps = {}
         self.cliente = set()
         self.raiz_tema_shopify = None
+        self.bd = {"motores": [], "api_directa": [], "evidencia": {}, "modelo": ""}
 
     # ------------------------------------------------------------------ util
     def agregar(self, regla, severidad, confianza, titulo, archivo=None, linea=None, evidencia=None, detalle=""):
@@ -334,8 +350,15 @@ class Escaner:
                     if datos.get("role") == "service_role":
                         return ("supabase_service_role", "Llave service_role de Supabase (acceso total a la base de datos)", m)
                     return ("jwt_anon", desc, m)
+                if pid in ("db_url", "sqlserver_conn") and self.password_ejemplo(m.group(0)):
+                    continue
                 return (pid, desc, m)
         return None
+
+    @staticmethod
+    def password_ejemplo(valor):
+        pw = password_de_bd(valor) or ""
+        return bool(PASSWORD_EJEMPLO.match(pw) or len(pw) < 3 or "…" in pw or "$" in pw or "{" in pw or "<" in pw or "%" in pw)
 
     def revisar_secretos_en_codigo(self):
         for rel, cont in self.archivos.items():
@@ -353,6 +376,8 @@ class Escaner:
                     else:
                         desc_final = desc
                     if PLACEHOLDER.search(valor):
+                        continue
+                    if pid in ("db_url", "sqlserver_conn") and self.password_ejemplo(valor):
                         continue
                     linea = self.linea_de(cont, m.start())
                     if pid == "google_ai":
@@ -381,8 +406,15 @@ class Escaner:
                     self.agregar(regla, sev, "confirmado", titulo, rel, linea, enmascarar(valor), detalle)
 
     def revisar_supabase(self):
-        usa = any(k.startswith("@supabase/") for k in self.deps) or any("supabase.co" in c for c in self.archivos.values())
+        usa = "supabase" in self.bd["motores"]
+        api = [a for a in self.bd["api_directa"] if a != "Supabase"]
         sqls = {r: c for r, c in self.archivos.items() if r.endswith(".sql")}
+        if not usa and not api:
+            # PostgreSQL / SQL Server / MySQL "normales": el navegador no se conecta a la base, solo tu servidor.
+            # Ahí RLS no es la protección principal; lo revisa revisar_bases_de_datos().
+            return
+        regla_sin_rls = "SUPABASE_SIN_RLS" if usa else "BD_SIN_RLS"
+        quien = "la anon key (que está en tu página)" if usa else "la API pública de %s" % "/".join(api)
         if not sqls:
             if usa:
                 self.manuales.append("Supabase: no hay archivos .sql en el proyecto, así que no se pudo revisar la "
@@ -404,18 +436,269 @@ class Escaner:
                 accion = accion.group(1) if accion else "all"
                 abierta = re.search(r"using\s*\(\s*true\s*\)", cuerpo) or re.search(r"with\s+check\s*\(\s*true\s*\)", cuerpo)
                 if abierta and accion != "select":
-                    self.agregar("SUPABASE_POLITICA_ABIERTA", "critica", "confirmado",
+                    self.agregar("SUPABASE_POLITICA_ABIERTA" if usa else "BD_POLITICA_ABIERTA", "critica", "confirmado",
                                  "La tabla '%s' deja que CUALQUIERA %s" % (m.group(2), {"all": "lea, cree, modifique y borre registros",
                                   "insert": "cree registros", "update": "modifique registros", "delete": "borre registros"}[accion]),
                                  rel, self.linea_de(limpio, m.start()), "policy %s ... (true)" % m.group(1),
-                                 "Una política con 'true' no pide estar logueado ni ser dueño del dato. Con la anon key "
-                                 "(que es pública) cualquiera puede ejecutar esa acción.")
+                                 "Una política con 'true' no pide estar logueado ni ser dueño del dato. Con %s "
+                                 "cualquiera puede ejecutar esa acción." % quien)
         for t, (rel, linea) in tablas.items():
             if t not in rls:
-                self.agregar("SUPABASE_SIN_RLS", "critica", "revisar",
+                self.agregar(regla_sin_rls, "critica", "revisar",
                              "La tabla '%s' no tiene activada la seguridad por filas (RLS)" % t, rel, linea, t,
-                             "Sin RLS, cualquiera con la anon key (que está en tu página) puede leer y modificar toda "
-                             "la tabla. Confírmalo en el panel de Supabase por si se activó desde ahí.")
+                             "Sin RLS, cualquiera con %s puede leer y modificar toda la tabla. Confírmalo en el panel "
+                             "por si se activó desde ahí." % quien)
+
+    # ------------------------------------------------------- bases de datos
+    def detectar_bases(self):
+        """Identifica qué motor usa el proyecto y cómo llega el navegador a los datos."""
+        bd = {"motores": [], "api_directa": [], "evidencia": {}, "modelo": ""}
+        codigo = {r: c for r, c in self.archivos.items() if not r.endswith(".md")}
+        todo = "\n".join(codigo.values())
+        deps = set(self.deps)
+
+        def marcar(motor, prueba):
+            if motor not in bd["motores"]:
+                bd["motores"].append(motor)
+            bd["evidencia"].setdefault(motor, [])
+            if prueba not in bd["evidencia"][motor] and len(bd["evidencia"][motor]) < 4:
+                bd["evidencia"][motor].append(prueba)
+
+        if any(k.startswith("@supabase/") for k in deps) or "supabase.co" in todo or "supabase/config.toml" in self.archivos:
+            marcar("supabase", "librería o URL de Supabase")
+        if {"firebase", "firebase-admin"} & deps or "firebase.json" in self.archivos:
+            marcar("firebase", "librería o firebase.json")
+        for d in ("pg", "postgres", "pg-promise", "@neondatabase/serverless", "@vercel/postgres", "slonik", "pg-pool"):
+            if d in deps:
+                marcar("postgresql", "dependencia %s" % d)
+        for d in ("mssql", "tedious", "msnodesqlv8"):
+            if d in deps:
+                marcar("sqlserver", "dependencia %s" % d)
+        for d in ("mysql", "mysql2", "@planetscale/database", "mariadb"):
+            if d in deps:
+                marcar("mysql", "dependencia %s" % d)
+        if {"mongodb", "mongoose"} & deps:
+            marcar("mongodb", "dependencia mongodb/mongoose")
+        for rel, c in codigo.items():
+            nombre = os.path.basename(rel).lower()
+            m = re.search(r'provider\s*=\s*"(postgresql|sqlserver|mysql|mongodb|cockroachdb)"', c) if nombre.endswith(".prisma") else None
+            if m:
+                marcar({"postgresql": "postgresql", "cockroachdb": "postgresql", "sqlserver": "sqlserver",
+                        "mysql": "mysql", "mongodb": "mongodb"}[m.group(1)], "Prisma (%s)" % rel)
+            if re.search(r"dialect\s*:\s*['\"](postgres|mssql|mysql|mariadb)['\"]|type\s*:\s*['\"](postgres|mssql|mysql|mariadb)['\"]|"
+                         r"client\s*:\s*['\"](pg|postgresql|mssql|mysql2?)['\"]", c):
+                t = re.search(r"['\"](postgres(?:ql)?|pg|mssql|mysql2?|mariadb)['\"]", c)
+                t = t.group(1) if t else "pg"
+                marcar("sqlserver" if t == "mssql" else ("mysql" if t.startswith(("mysql", "maria")) else "postgresql"),
+                       "configuración ORM en %s" % rel)
+            if re.search(r"drizzle-orm/(pg-core|node-postgres|postgres-js|neon)", c):
+                marcar("postgresql", "Drizzle en %s" % rel)
+            if re.search(r"drizzle-orm/mysql", c):
+                marcar("mysql", "Drizzle en %s" % rel)
+            if re.search(r"\bpostgres(?:ql)?://", c):
+                marcar("postgresql", "dirección postgres:// en %s" % rel)
+            if re.search(r"\b(?:mssql|sqlserver)://|(?i:(?:Server|Data Source)\s*=[^;\n]+;\s*(?:Initial Catalog|Database)\s*=)", c):
+                marcar("sqlserver", "cadena de conexión en %s" % rel)
+            if re.search(r"\bmysql://|\bmariadb://|mysqli_connect|new\s+PDO\(\s*['\"]mysql:", c):
+                marcar("mysql", "conexión MySQL en %s" % rel)
+            if re.search(r"Microsoft\.Data\.SqlClient|System\.Data\.SqlClient|UseSqlServer\(", c):
+                marcar("sqlserver", "SqlClient en %s" % rel)
+            if re.search(r"Npgsql|UseNpgsql\(", c):
+                marcar("postgresql", "Npgsql en %s" % rel)
+            if nombre in ("requirements.txt", "pyproject.toml", "pipfile"):
+                if re.search(r"psycopg|asyncpg", c, re.I):
+                    marcar("postgresql", "librería Python en %s" % rel)
+                if re.search(r"pyodbc|pymssql", c, re.I):
+                    marcar("sqlserver", "librería Python en %s" % rel)
+                if re.search(r"mysqlclient|pymysql|mysql-connector", c, re.I):
+                    marcar("mysql", "librería Python en %s" % rel)
+            if re.search(r"(docker-)?compose[\w.-]*\.ya?ml$", nombre):
+                for img, motor in (("postgres", "postgresql"), ("postgis", "postgresql"), ("mssql", "sqlserver"),
+                                   ("mysql", "mysql"), ("mariadb", "mysql"), ("mongo", "mongodb")):
+                    if re.search(r"image:\s*['\"]?[\w./-]*%s[\w./:-]*" % img, c):
+                        marcar(motor, "contenedor en %s" % rel)
+                if re.search(r"image:\s*['\"]?postgrest/postgrest", c):
+                    bd["api_directa"].append("PostgREST")
+                if re.search(r"image:\s*['\"]?hasura/graphql-engine", c):
+                    bd["api_directa"].append("Hasura")
+            if nombre.endswith(".sql") and re.search(r"^\s*GO\s*$|\bNVARCHAR\b|IDENTITY\s*\(\s*1\s*,\s*1\s*\)|\[dbo\]", c, re.I | re.M):
+                marcar("sqlserver", "script T-SQL %s" % rel)
+        if re.search(r"\bPGRST_[A-Z_]+|\bHASURA_GRAPHQL_[A-Z_]+", todo):
+            bd["api_directa"].append("PostgREST" if "PGRST_" in todo else "Hasura")
+        if "supabase" in bd["motores"]:
+            bd["api_directa"].insert(0, "Supabase")
+        bd["api_directa"] = sorted(set(bd["api_directa"]), key=bd["api_directa"].index)
+        sql = [m for m in bd["motores"] if m in ("postgresql", "sqlserver", "mysql")]
+        partes = []
+        if bd["api_directa"]:
+            partes.append("El navegador consulta la base directamente a través de %s: la protección son las reglas por "
+                          "fila (RLS) y las políticas de cada tabla." % " / ".join(bd["api_directa"]))
+        if "firebase" in bd["motores"]:
+            partes.append("Firebase: la protección son las reglas de seguridad (firestore.rules / storage.rules).")
+        if sql and not [a for a in bd["api_directa"] if a != "Supabase"]:
+            partes.append("%s: solo el servidor de la app se conecta a la base; el navegador nunca. Aquí RLS NO es la "
+                          "protección principal: lo que importa es que la contraseña de la base no se filtre, que las "
+                          "consultas usen parámetros (inyección SQL), que la app use un usuario con permisos mínimos, "
+                          "que el puerto no esté abierto a internet y que la conexión vaya cifrada."
+                          % ", ".join({"postgresql": "PostgreSQL", "sqlserver": "SQL Server", "mysql": "MySQL"}[m] for m in sql))
+        if "mongodb" in bd["motores"]:
+            partes.append("MongoDB: igual que SQL, solo el servidor debe conectarse; cuidado con filtros armados con "
+                          "datos del usuario (inyección NoSQL).")
+        bd["modelo"] = " ".join(partes) or "No se detectó ninguna base de datos."
+        self.bd = bd
+
+    INYECCION_JS = [
+        re.compile(r"\.(?:query|execute|raw|unsafe|exec|all|get|run|prepare|\$queryRawUnsafe|\$executeRawUnsafe)\s*\(\s*`([^`]*\$\{[^`]*)`", re.S),
+        re.compile(r"\.(?:query|execute|raw|exec|all|get|run|prepare|\$queryRawUnsafe|\$executeRawUnsafe)\s*\(\s*(['\"])((?:(?!\1).)*)\1\s*\+"),
+    ]
+    INYECCION_OTROS = [
+        re.compile(r"\.execute(?:many)?\(\s*f['\"]"),                                   # Python f-string
+        re.compile(r"\.execute(?:many)?\(\s*(['\"])[^'\"]*\1\s*(?:%\s*[\w(]|\.format\(|\+)"),  # Python % / format / +
+        re.compile(r"\btext\(\s*f['\"]"),                                               # SQLAlchemy text(f"...")
+        re.compile(r"(?:mysqli_query|pg_query|sqlsrv_query|->query|->exec)\s*\([^;]*?(?:\$_(?:GET|POST|REQUEST|COOKIE)|\"[^\"]*\$\w+[^\"]*\"|['\"]\s*\.\s*\$)"),  # PHP
+        re.compile(r"new\s+SqlCommand\(\s*(?:\$\"[^\"]*\{|\"[^\"]*\"\s*\+)|(?:FromSqlRaw|ExecuteSqlRaw)\(\s*(?:\$\"|\"[^\"]*\"\s*\+)"),  # C#
+    ]
+    SQL_PALABRA = re.compile(r"\b(select|insert|update|delete|where|from|values|order\s+by|exec)\b", re.I)
+    DRIVERS_BD = re.compile(r"""(?:from\s+|require\(\s*)['"](pg|postgres|mssql|tedious|mysql2?(?:/promise)?|mongodb|mongoose|@prisma/client|"""
+                            r"""@neondatabase/serverless|@vercel/postgres|knex|sequelize|typeorm)['"]""")
+
+    def revisar_bases_de_datos(self):
+        sql = [m for m in self.bd["motores"] if m in ("postgresql", "sqlserver", "mysql", "mongodb")]
+        if not sql and "supabase" not in self.bd["motores"]:
+            return
+        # 1. Conexión a la base desde el navegador
+        for rel in sorted(self.cliente):
+            m = self.DRIVERS_BD.search(self.archivos.get(rel, ""))
+            if m:
+                self.agregar("BD_DESDE_NAVEGADOR", "critica", "revisar",
+                             "La página intenta conectarse directo a la base de datos", rel,
+                             self.linea_de(self.archivos[rel], m.start()), m.group(1),
+                             "Para conectarse, la página necesita usuario y contraseña de la base, y entonces cualquier "
+                             "visitante los tiene. Las consultas deben hacerse en el servidor (una ruta de API).")
+        for rel, c in self.archivos_codigo():
+            es_cliente = rel in self.cliente
+            # 2. Contraseña escrita en la configuración de conexión
+            if self.DRIVERS_BD.search(c) or re.search(r"SqlConnection|createPool|createConnection|new\s+Pool\(|new\s+Client\(", c):
+                for m in re.finditer(r"\bpassword\s*[:=]\s*(['\"])([^'\"\s]{3,})\1", c, re.I):
+                    if PASSWORD_EJEMPLO.match(m.group(2)) or PLACEHOLDER.search(m.group(2)):
+                        continue
+                    self.agregar("BD_CREDENCIALES_EN_CODIGO", "critica" if es_cliente else "alta", "confirmado",
+                                 "La contraseña de la base de datos está escrita en el código", rel,
+                                 self.linea_de(c, m.start()), "password: ****",
+                                 "Cualquiera con acceso al código (GitHub, un freelancer, un respaldo) entra a tu base. "
+                                 "Muévela a una variable de entorno y cámbiala.")
+            # 3. Usuario administrador para la app
+            for m in re.finditer(r"\buser(?:name)?\s*[:=]\s*['\"]?(postgres|sa|root)['\"]?\b", c, re.I):
+                self.agregar("BD_USUARIO_ADMIN", "alta", "revisar",
+                             "La app se conecta a la base con el usuario administrador '%s'" % m.group(1), rel,
+                             self.linea_de(c, m.start()), m.group(1),
+                             "Si alguien logra una inyección SQL o roba la conexión, tiene control total de la base "
+                             "(y en SQL Server o Postgres, a veces del servidor). Crea un usuario solo con los permisos que la app necesita.")
+            # 4. Conexión sin cifrar
+            for m in re.finditer(r"sslmode=disable|\bssl\s*:\s*false|\bencrypt\s*:\s*false|Encrypt\s*=\s*(?:False|no)\b|"
+                                 r"trustServerCertificate\s*[:=]\s*true|TrustServerCertificate\s*=\s*True", c, re.I):
+                self.agregar("BD_SIN_CIFRADO", "media", "revisar", "La conexión a la base de datos no va cifrada (o no verifica el certificado)",
+                             rel, self.linea_de(c, m.start()), m.group(0),
+                             "Si la base está en otro servidor, la contraseña y los datos viajan sin protección. "
+                             "Si la base está en el mismo servidor, no es grave.")
+            # 5. Inyección SQL
+            ext = os.path.splitext(rel)[1].lower()
+            patrones = self.INYECCION_JS if ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs") else self.INYECCION_OTROS
+            for rx in patrones:
+                for m in rx.finditer(c):
+                    fragmento = m.group(0)
+                    if ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs") and not self.SQL_PALABRA.search(fragmento):
+                        continue
+                    self.agregar("SQL_INYECCION", "critica", "revisar",
+                                 "La consulta a la base se arma pegando texto (posible inyección SQL)", rel,
+                                 self.linea_de(c, m.start()), re.sub(r"\s+", " ", fragmento)[:90],
+                                 "Si ese texto viene del cliente (buscador, login, formulario), alguien puede escribir un "
+                                 "truco como ' OR '1'='1 y ver o borrar toda la base. Usa consultas con parámetros "
+                                 "($1, @id, ?) en vez de pegar el texto.")
+            for m in re.finditer(r"(?:const|let|var)\s+(\w+)\s*=\s*(['\"`])\s*(?:select|insert|update|delete)\b[^\n;]*?(?:\2\s*\+|\$\{)", c, re.I):
+                if re.search(r"\.(?:query|execute|raw|exec|\$queryRawUnsafe|\$executeRawUnsafe)\(\s*%s\b" % re.escape(m.group(1)), c):
+                    self.agregar("SQL_INYECCION", "critica", "revisar",
+                                 "La consulta a la base se arma pegando texto (posible inyección SQL)", rel,
+                                 self.linea_de(c, m.start()), re.sub(r"\s+", " ", m.group(0))[:90],
+                                 "Si una parte viene del cliente, puede cambiar la consulta. Usa parámetros en vez de pegar texto.")
+        # 3b. Usuario administrador dentro de una dirección de conexión (código o .env de producción)
+        for rel, c in self.archivos.items():
+            if rel.endswith(".md"):
+                continue
+            for m in re.finditer(r"\b(?:postgres(?:ql)?|mysql|mariadb|mssql|sqlserver)://(postgres|root|sa):[^@\s'\"]+@([^\s'\"/:,;)]+)", c):
+                host = m.group(2).lower()
+                if host in ("localhost", "127.0.0.1", "::1", "host.docker.internal") or "." not in host:
+                    continue  # base local de desarrollo o un servicio de docker-compose
+                self.agregar("BD_USUARIO_ADMIN", "alta", "revisar",
+                             "La app se conecta a la base con el usuario administrador '%s'" % m.group(1), rel,
+                             self.linea_de(c, m.start()), "%s@%s" % (m.group(1), host),
+                             "Si alguien logra una inyección SQL o roba la conexión, tiene control total de la base. "
+                             "Crea un usuario solo con los permisos que la app necesita.")
+            for m in re.finditer(r"(?i)(?:Server|Data Source)\s*=\s*([^;'\"\n]+);[^'\"\n]*?(?:User\s*Id|Uid)\s*=\s*sa\s*;", c):
+                self.agregar("BD_USUARIO_ADMIN", "alta", "revisar", "La app se conecta a SQL Server con el usuario 'sa'", rel,
+                             self.linea_de(c, m.start()), "User Id=sa @ %s" % m.group(1).strip(),
+                             "'sa' es el administrador total de SQL Server. Crea un login para la app con permisos mínimos.")
+        # 6. Scripts SQL y contraseñas del contenedor
+        for rel, c in self.archivos.items():
+            nombre = os.path.basename(rel).lower()
+            if nombre.endswith(".sql"):
+                limpio = re.sub(r"--[^\n]*", "", c)
+                reglas = [
+                    (r"sp_configure\s+'xp_cmdshell'\s*,\s*1", "BD_XP_CMDSHELL", "critica",
+                     "SQL Server tiene activado xp_cmdshell", "Permite ejecutar comandos del sistema desde la base: una "
+                     "inyección SQL se convierte en control del servidor. Desactívalo."),
+                    (r"ALTER\s+SERVER\s+ROLE\s+sysadmin\s+ADD\s+MEMBER|sp_addsrvrolemember[^;]*sysadmin", "BD_PERMISOS_EXCESIVOS", "alta",
+                     "Se le da rol sysadmin a un usuario de SQL Server", "Con sysadmin controla todo el servidor de base de datos."),
+                    (r"ALTER\s+ROLE\s+db_owner\s+ADD\s+MEMBER|sp_addrolemember[^;]*db_owner", "BD_PERMISOS_EXCESIVOS", "media",
+                     "Un usuario recibe db_owner (dueño de toda la base)", "Si es el usuario de la app, dale solo lectura y escritura en las tablas que usa."),
+                    (r"(?:ALTER|CREATE)\s+(?:ROLE|USER)\s+\S+[^;]*\bSUPERUSER\b", "BD_PERMISOS_EXCESIVOS", "alta",
+                     "Se crea un usuario SUPERUSER en PostgreSQL", "Un superusuario puede leer archivos y ejecutar comandos en el servidor."),
+                    (r"GRANT\s+ALL\b[^;]*\bTO\s+PUBLIC\b", "BD_PERMISOS_EXCESIVOS", "alta",
+                     "Se dan todos los permisos a PUBLIC (cualquier usuario de la base)", "Cualquier usuario que se conecte puede modificarlo todo."),
+                    (r"GRANT\s+ALL\s+PRIVILEGES\s+ON\s+\*\.\*\s+TO\s+[^;]*@\s*'%'", "BD_PERMISOS_EXCESIVOS", "alta",
+                     "Un usuario de MySQL tiene todos los permisos desde cualquier lugar", "Limita sus permisos a la base de la app y a 'localhost'."),
+                ]
+                for patron, regla, sev, titulo, detalle in reglas:
+                    for m in re.finditer(patron, limpio, re.I):
+                        self.agregar(regla, sev, "confirmado", titulo, rel, self.linea_de(limpio, m.start()),
+                                     re.sub(r"\s+", " ", m.group(0))[:80], detalle)
+                for m in re.finditer(r"(?:CREATE|ALTER)\s+(?:ROLE|USER|LOGIN)\s+\S+[^;]*?PASSWORD\s*=?\s*'([^']{4,})'", limpio, re.I):
+                    if PASSWORD_EJEMPLO.match(m.group(1)):
+                        continue
+                    self.agregar("BD_PASSWORD_EN_SQL", "alta" if self.en_git(rel) or self.rastreados is None else "media",
+                                 "confirmado", "Un script SQL tiene una contraseña escrita", rel,
+                                 self.linea_de(limpio, m.start()), "PASSWORD '****'",
+                                 "Queda guardada en el repositorio. Cámbiala en la base y saca la contraseña del script.")
+            if re.search(r"(docker-)?compose[\w.-]*\.ya?ml$", nombre):
+                for m in re.finditer(r"^\s*-\s*['\"]?(?:(\d+\.\d+\.\d+\.\d+):)?(\d+):(\d+)['\"]?\s*$", c, re.M):
+                    if int(m.group(3)) in (5432, 1433, 3306, 27017, 6379) and m.group(1) in (None, "0.0.0.0"):
+                        self.agregar("BD_PUERTO_PUBLICADO", "media", "revisar",
+                                     "El docker-compose publica la base de datos hacia afuera (puerto %s)" % m.group(2), rel,
+                                     self.linea_de(c, m.start()), m.group(0).strip(),
+                                     "Si este archivo se usa en el servidor, la base queda abierta a internet aunque el "
+                                     "firewall diga lo contrario. Usa 127.0.0.1:%s:%s o quita 'ports'." % (m.group(2), m.group(3)))
+                for m in re.finditer(r"(POSTGRES_PASSWORD|MSSQL_SA_PASSWORD|SA_PASSWORD|MYSQL_ROOT_PASSWORD|MYSQL_PASSWORD|"
+                                     r"MONGO_INITDB_ROOT_PASSWORD)\s*[:=]\s*['\"]?([^\s'\"$]{3,})", c):
+                    if PASSWORD_EJEMPLO.match(m.group(2)):
+                        continue
+                    self.agregar("BD_PASSWORD_EN_COMPOSE", "media", "confirmado",
+                                 "La contraseña de la base está escrita en el docker-compose", rel, self.linea_de(c, m.start()),
+                                 "%s=****" % m.group(1),
+                                 "Usa ${%s} y ponla en un .env que no se suba a git." % m.group(1))
+        # 7. Verificaciones manuales según el motor
+        textos = {
+            "postgresql": "PostgreSQL: confirma que el puerto 5432 no responde desde internet, que pg_hba.conf no tiene "
+                          "'trust' ni '0.0.0.0/0', que la app usa un usuario propio con permisos mínimos (no 'postgres') "
+                          "y que hay un pg_dump diario guardado fuera del servidor.",
+            "sqlserver": "SQL Server: confirma que el puerto 1433 no responde desde internet, que el usuario 'sa' está "
+                         "desactivado o tiene una contraseña larga, que la app usa un login propio sin sysadmin ni db_owner, "
+                         "que xp_cmdshell está desactivado y que las conexiones usan Encrypt=True.",
+            "mysql": "MySQL: confirma que el puerto 3306 no responde desde internet, que la app no usa 'root' y que los "
+                     "usuarios solo se conectan desde 'localhost' o la IP de la app.",
+            "mongodb": "MongoDB: confirma que el puerto 27017 no responde desde internet y que tiene usuario y contraseña activados.",
+        }
+        for m in sql:
+            self.manuales.append(textos[m])
 
     def revisar_firebase(self):
         usa = "firebase" in self.deps or "firebase-admin" in self.deps
@@ -458,7 +741,7 @@ class Escaner:
 
     def archivos_codigo(self):
         for rel, c in self.archivos.items():
-            if os.path.splitext(rel)[1].lower() in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".php"}:
+            if os.path.splitext(rel)[1].lower() in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".php", ".cs"}:
                 yield rel, c
 
     def revisar_rutas_admin(self):
@@ -806,7 +1089,9 @@ class Escaner:
             self.clasificar_cliente()
             self.revisar_env()
             self.revisar_secretos_en_codigo()
+            self.detectar_bases()
             self.revisar_supabase()
+            self.revisar_bases_de_datos()
             self.revisar_firebase()
             self.revisar_rutas_admin()
             self.revisar_operaciones_sensibles()
@@ -827,7 +1112,7 @@ class Escaner:
         self.hallazgos.sort(key=lambda x: (SEVERIDADES.index(x["severidad"]), x["confianza"] != "confirmado", x["archivo"] or ""))
         resumen = {s: sum(1 for x in self.hallazgos if x["severidad"] == s) for s in SEVERIDADES}
         return {"proyecto": self.raiz, "url": url, "archivos_revisados": len(self.archivos),
-                "archivos_de_navegador": sorted(self.cliente)[:200], "resumen": resumen,
+                "archivos_de_navegador": sorted(self.cliente)[:200], "bases_de_datos": self.bd, "resumen": resumen,
                 "hallazgos": self.hallazgos, "verificaciones_manuales": self.manuales, "notas": self.notas}
 
 

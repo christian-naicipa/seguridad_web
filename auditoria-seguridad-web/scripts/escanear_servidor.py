@@ -588,6 +588,49 @@ class EscanerServidor:
                 self.agregar("NGINX_VERSION", "baja", "confirmado", "nginx muestra su versión", "/etc/nginx/nginx.conf",
                              None, "Agrega 'server_tokens off;' para no facilitar a los bots buscar fallas de tu versión.")
 
+    # ------------------------------------------------------ bases de datos del VPS
+    def revisar_bases_servidor(self):
+        for hba in self.s.glob("/etc/postgresql/*/main/pg_hba.conf"):
+            txt = self.s.leer(hba)
+            if txt is None:
+                if not self.s.es_root:
+                    self.omitir("configuración de acceso de PostgreSQL (pg_hba.conf necesita sudo)")
+                continue
+            self.inv["sistema"]["postgresql"] = "instalado (%s)" % hba.split("/")[3]
+            for i, linea in enumerate(txt.splitlines(), 1):
+                p = linea.split("#")[0].split()
+                if len(p) < 5 or p[0] not in ("host", "hostssl", "hostnossl"):
+                    continue
+                direccion, metodo = p[3], p[-1].lower()
+                if "/" not in direccion and len(p) >= 6:  # formato "IP máscara"
+                    direccion, metodo = p[3] + " " + p[4], p[-1].lower()
+                todo_internet = direccion in ("0.0.0.0/0", "::/0", "all", "0.0.0.0 0.0.0.0")
+                local = direccion.startswith(("127.", "::1"))
+                if metodo == "trust" and not local:
+                    self.agregar("PG_TRUST_REMOTO", "critica", "confirmado",
+                                 "PostgreSQL deja entrar SIN contraseña desde %s" % ("cualquier lugar" if todo_internet else direccion),
+                                 "%s:%d" % (hba, i), linea.strip(),
+                                 "'trust' significa que no pide contraseña. Si el puerto 5432 llega a internet, cualquiera "
+                                 "entra a tu base como el usuario que quiera.")
+                elif metodo == "trust" and local:
+                    self.agregar("PG_TRUST_LOCAL", "media", "confirmado",
+                                 "PostgreSQL no pide contraseña a los programas del propio servidor",
+                                 "%s:%d" % (hba, i), linea.strip(),
+                                 "Si otro programa del servidor es hackeado, entra a tu base sin contraseña. Usa scram-sha-256.")
+                elif todo_internet and metodo not in ("reject",):
+                    self.agregar("PG_ACCESO_DESDE_INTERNET", "alta", "revisar",
+                                 "PostgreSQL acepta conexiones desde cualquier IP de internet",
+                                 "%s:%d" % (hba, i), linea.strip(),
+                                 "Cualquiera puede intentar adivinar la contraseña. Limita a 127.0.0.1 o a la IP de tu app.")
+                if metodo == "password":
+                    self.agregar("PG_PASSWORD_PLANO", "media", "confirmado",
+                                 "PostgreSQL recibe las contraseñas sin cifrar", "%s:%d" % (hba, i), linea.strip(),
+                                 "Cambia el método 'password' por 'scram-sha-256'.")
+        if self.s.existe("/var/opt/mssql/mssql.conf") or self.s.existe("/opt/mssql/bin/sqlservr"):
+            self.inv["sistema"]["sqlserver"] = "instalado"
+            self.manuales.append("SQL Server en el VPS: confirma que el usuario 'sa' está desactivado o tiene una contraseña "
+                                 "larga, que el puerto 1433 no responde desde internet y que xp_cmdshell está desactivado.")
+
     # ------------------------------------------------------ backups y certificados
     def revisar_backups_y_certificados(self):
         timers = self.s.cmd("timers", ["systemctl", "list-timers", "--all", "--no-legend", "--plain", "--no-pager"]) or ""
@@ -632,7 +675,7 @@ class EscanerServidor:
     def ejecutar(self):
         for paso in (self.revisar_sistema, self.revisar_firewall, self.revisar_puertos, self.revisar_docker,
                      self.revisar_ssh, self.revisar_actualizaciones, self.revisar_usuarios, self.revisar_compromiso,
-                     self.revisar_apps_y_secretos, self.revisar_backups_y_certificados):
+                     self.revisar_apps_y_secretos, self.revisar_bases_servidor, self.revisar_backups_y_certificados):
             try:
                 paso()
             except Exception as e:  # una revisión que falla no debe tumbar las demás

@@ -96,6 +96,8 @@ def servidor_vulnerable(base):
     escribir(base, c + "df.txt", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                                  "/dev/sda1 40000000 37200000 2800000 93% /\n")
     escribir(base, c + "timers.txt", "Mon 2026-10-06 00:00:00 UTC 10h left - - logrotate.timer logrotate.service\n")
+    escribir(base, "/etc/postgresql/14/main/pg_hba.conf", "local   all   postgres   peer\n"
+                                                          "host    all   all        0.0.0.0/0   trust\n")
 
 
 def servidor_seguro(base):
@@ -141,6 +143,8 @@ def servidor_seguro(base):
     escribir(base, c + "df.txt", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                                  "/dev/sda1 80000000 30000000 50000000 38% /\n")
     escribir(base, c + "timers.txt", "Mon 2026-10-06 00:00:00 UTC 10h left - - logrotate.timer logrotate.service\n")
+    escribir(base, "/etc/postgresql/16/main/pg_hba.conf", "local   all   postgres   peer\n"
+                                                          "host    tienda   app_tienda   127.0.0.1/32   scram-sha-256\n")
 
 
 if __name__ == "__main__":

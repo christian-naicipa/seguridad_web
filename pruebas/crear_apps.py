@@ -629,11 +629,173 @@ const s="https://qwertyuiopasdfgh.supabase.co",k="{JWT_ANON}";
 const f={{apiKey:"{FIREBASE_WEB_KEY}",projectId:"tienda"}};
 """)
 
+# ---------------------------------------------------------------------------
+# App E: API con PostgreSQL directo (sin Supabase), vulnerable
+# ---------------------------------------------------------------------------
+DB_URL_PG = "postgres" + "://postgres:" + "SuperClave2024" + "@db.miempresa.com:5432/tienda"
+ADO_SQLSERVER = "Server=sql.miempresa.com;Database=Tienda;User Id=sa;" + "Pass" + "word=Admin123!;"
+
+
+def app_api_postgres():
+    a = "api-postgres"
+    limpiar(a)
+    escribir(a, "package.json", json.dumps({"name": "api-tienda", "private": True, "type": "module",
+                                            "dependencies": {"express": "4.21.2", "pg": "8.13.1"}}, indent=2))
+    escribir(a, ".gitignore", "node_modules\n.env\n")
+    escribir(a, "src/db.js", """
+import pg from 'pg'
+// copiado del panel del proveedor
+export const pool = new pg.Pool({ connectionString: '%s', ssl: false })
+""" % DB_URL_PG)
+    escribir(a, "src/index.js", """
+import express from 'express'
+import { pool } from './db.js'
+
+const app = express()
+app.use(express.json())
+
+// buscador de clientes
+app.get('/api/clientes', async (req, res) => {
+  const r = await pool.query(`SELECT id, nombre, email FROM clientes WHERE nombre ILIKE '%${req.query.q}%'`)
+  res.json(r.rows)
+})
+
+// login
+app.post('/api/login', async (req, res) => {
+  const r = await pool.query("SELECT * FROM usuarios WHERE email = '" + req.body.email + "' AND clave = '" + req.body.clave + "'")
+  res.json({ ok: r.rows.length > 0 })
+})
+
+// esto está bien: consulta con parámetros
+app.get('/api/productos/:id', async (req, res) => {
+  const r = await pool.query('SELECT * FROM productos WHERE id = $1', [req.params.id])
+  res.json(r.rows[0])
+})
+
+app.listen(3000)
+""")
+    escribir(a, "db/schema.sql", """
+CREATE TABLE clientes (id serial PRIMARY KEY, nombre text, email text);
+CREATE TABLE usuarios (id serial PRIMARY KEY, email text, clave text);
+CREATE TABLE productos (id serial PRIMARY KEY, nombre text, precio numeric);
+CREATE ROLE app_tienda LOGIN SUPERUSER PASSWORD 'TiendaSegura99';
+GRANT ALL ON ALL TABLES IN SCHEMA public TO PUBLIC;
+""")
+    escribir(a, "docker-compose.yml", """
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ClaveDelContenedor1
+    ports:
+      - "5432:5432"
+""")
+    git_commit(a)
+
+
+# ---------------------------------------------------------------------------
+# App F: API con SQL Server, vulnerable
+# ---------------------------------------------------------------------------
+def app_api_sqlserver():
+    a = "api-sqlserver"
+    limpiar(a)
+    escribir(a, "package.json", json.dumps({"name": "api-pedidos", "private": True,
+                                            "dependencies": {"express": "4.21.2", "mssql": "11.0.1"}}, indent=2))
+    escribir(a, ".gitignore", "node_modules\n.env\n")
+    escribir(a, "src/db.js", """
+const sql = require('mssql')
+const config = {
+  user: 'sa',
+  password: 'Admin123!',
+  server: 'sql.miempresa.com',
+  database: 'Tienda',
+  options: { encrypt: false, trustServerCertificate: true },
+}
+module.exports = { sql, pool: new sql.ConnectionPool(config).connect() }
+""")
+    escribir(a, "src/pedidos.js", """
+const { sql, pool } = require('./db')
+
+async function pedidosPorEmail(req, res) {
+  const p = await pool
+  const r = await p.request().query("SELECT * FROM Pedidos WHERE Email = '" + req.body.email + "'")
+  res.json(r.recordset)
+}
+
+// esto está bien: parámetros
+async function pedidoPorId(req, res) {
+  const p = await pool
+  const r = await p.request().input('id', sql.Int, req.params.id).query('SELECT * FROM Pedidos WHERE Id = @id')
+  res.json(r.recordset[0])
+}
+
+module.exports = { pedidosPorEmail, pedidoPorId }
+""")
+    escribir(a, "src/reportes.js", "module.exports.cadena = '%s'\n" % ADO_SQLSERVER)
+    escribir(a, "sql/setup.sql", """
+CREATE TABLE [dbo].[Pedidos] (Id INT IDENTITY(1,1) PRIMARY KEY, Email NVARCHAR(200), Total DECIMAL(10,2));
+GO
+EXEC sp_configure 'show advanced options', 1;
+EXEC sp_configure 'xp_cmdshell', 1;
+RECONFIGURE;
+GO
+CREATE LOGIN app_tienda WITH PASSWORD = 'LoginDeLaApp2024';
+ALTER SERVER ROLE sysadmin ADD MEMBER app_tienda;
+GO
+""")
+    git_commit(a)
+
+
+# ---------------------------------------------------------------------------
+# App G: API con PostgreSQL bien hecha (para medir falsas alarmas)
+# ---------------------------------------------------------------------------
+def app_api_postgres_segura():
+    a = "api-postgres-segura"
+    limpiar(a)
+    escribir(a, "package.json", json.dumps({"name": "api-segura", "private": True, "type": "module",
+                                            "dependencies": {"express": "4.21.2", "postgres": "3.4.5"}}, indent=2))
+    escribir(a, ".gitignore", "node_modules\n.env*\n!.env.example\n")
+    escribir(a, ".env.example", "DATABASE_URL=postgres" + "://app_tienda:password@localhost:5432/tienda\n")
+    escribir(a, "src/db.js", """
+import postgres from 'postgres'
+export const sql = postgres(process.env.DATABASE_URL, { ssl: 'require', max: 10 })
+""")
+    escribir(a, "src/index.js", """
+import express from 'express'
+import { sql } from './db.js'
+
+const app = express()
+app.get('/api/clientes', async (req, res) => {
+  const q = String(req.query.q || '').slice(0, 50)
+  const filas = await sql`SELECT id, nombre FROM clientes WHERE nombre ILIKE ${'%' + q + '%'} LIMIT 20`
+  res.json(filas)
+})
+app.listen(3000)
+""")
+    escribir(a, "db/schema.sql", """
+CREATE TABLE clientes (id serial PRIMARY KEY, nombre text, email text);
+CREATE ROLE app_tienda LOGIN;
+GRANT SELECT, INSERT, UPDATE ON clientes TO app_tienda;
+""")
+    escribir(a, "docker-compose.yml", """
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+""")
+    git_commit(a)
+
 
 if __name__ == "__main__":
     app_tienda_nextjs()
     app_firebase_chatbot()
     app_shopify()
     app_segura()
+    app_api_postgres()
+    app_api_sqlserver()
+    app_api_postgres_segura()
     sitio_publicado()
     print("Apps de prueba creadas en", BASE)

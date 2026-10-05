@@ -42,7 +42,7 @@ Abre Claude Code en la carpeta de tu proyecto y escribe algo como:
 o simplemente *"¿me pueden hackear?"*. El skill se activa solo.
 
 Vas a recibir:
-1. **`SEGURIDAD-REPORTE.html`** en tu proyecto. Ábrelo en el navegador:
+1. **`SEGURIDAD-REPORTE.html`**, enviado como archivo dentro del chat: en Claude como adjunto, y en Hermes como adjunto de Telegram, Discord, Slack o WhatsApp. Ábrelo en el navegador:
    - Un veredicto (¿la puedo publicar?) y un gráfico de problemas por gravedad.
    - **Haz esto hoy:** qué llaves cambiar y dónde se cambian.
    - Una tarjeta por problema con el botón **Copiar prompt**.
@@ -83,7 +83,8 @@ Ejemplos para descargar y abrir en el navegador:
 |---|---|
 | Llaves expuestas | OpenAI, Claude, Stripe, Supabase `service_role`, Shopify, Mercado Pago, AWS, GitHub, Telegram, en el código o en el JavaScript publicado |
 | Archivos `.env` | Subidos a git (incluso en el historial), publicados en el sitio o con prefijo público (`NEXT_PUBLIC_`, `VITE_`) |
-| Base de datos | Supabase sin RLS o con políticas `true`, Firebase con `if true` o en modo de prueba |
+| Base de datos | Detecta el motor y diagnostica según cómo se usa. **Supabase / PostgREST / Hasura:** tablas sin RLS o con políticas `true`. **Firebase:** reglas con `if true` o en modo de prueba. **PostgreSQL, SQL Server y MySQL:** inyección SQL, contraseña de la base en el código, conexión con `postgres`, `sa` o `root`, permisos excesivos (`SUPERUSER`, `sysadmin`, `xp_cmdshell`), conexión sin cifrar y puerto publicado en docker-compose |
+| **VPS: PostgreSQL** | `pg_hba.conf` que deja entrar sin contraseña (`trust`) o desde cualquier IP |
 | Accesos | Paneles `/admin` sin login, endpoints que borran usuarios o crean descuentos sin verificación |
 | Pagos | Precio que viene del navegador, webhooks de Stripe, Shopify o Mercado Pago sin verificar la firma |
 | Chatbots con IA | Bots que pueden dar reembolsos o cupones, prompt injection, endpoints sin límite de uso |
@@ -113,11 +114,12 @@ Las pruebas crean apps con vulnerabilidades plantadas:
 - Next.js con Supabase.
 - Firebase con un chatbot.
 - Una app de Shopify.
+- APIs con PostgreSQL y SQL Server vulnerables, y una con PostgreSQL bien hecha.
 - Una tienda bien hecha, para medir falsas alarmas.
 - Dos sitios publicados de prueba.
 - Dos servidores VPS simulados: uno hackeado y mal configurado, y otro bien configurado.
 
-Luego verifican que los escáneres detecten todo, que no den falsas alarmas, que el reporte nunca muestre llaves completas y que la auditoría del VPS no deje archivos en el servidor.
+Luego verifican que los escáneres detecten todo, que no den falsas alarmas, que nunca pida RLS en una base PostgreSQL o SQL Server donde no aplica, que el reporte nunca muestre llaves ni contraseñas y que la auditoría del VPS no deje archivos en el servidor.
 
 ```bash
 python3 pruebas/test_escanear.py

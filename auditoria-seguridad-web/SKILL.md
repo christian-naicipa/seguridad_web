@@ -31,6 +31,7 @@ El escáner devuelve un JSON con:
 - `verificaciones_manuales`: cosas que el código no permite comprobar, como backups, 2FA o RLS cuando no hay archivos SQL.
 - `notas`: limitaciones de esta corrida; por ejemplo, que no se pudo correr `npm audit`.
 - `archivos_de_navegador`: qué archivos terminan en el navegador del visitante. Sirve para razonar qué es público.
+- `bases_de_datos`: qué motor usa el proyecto (Supabase, Firebase, PostgreSQL, SQL Server, MySQL, MongoDB), si el navegador habla directo con la base (`api_directa`) y un texto `modelo` que explica qué la protege. Úsalo para el diagnóstico de la base de datos (ver Paso 3).
 
 Si el escáner falla o no hay Python, haz la revisión manualmente siguiendo `references/correcciones.md`, y dilo en el reporte.
 
@@ -79,7 +80,19 @@ python3 <ruta-del-skill>/scripts/escanear.py /var/www/mi-tienda
 - `ADMIN_SIN_PROTECCION`: ¿hay verificación de sesión en otro lado, como un layout, el middleware o un wrapper? Si la hay y cubre esa ruta, descártalo.
 - `PRECIO_DESDE_CLIENTE`: ¿el valor viene realmente del cuerpo de la petición o se recalcula después?
 - `WEBHOOK_SIN_FIRMA`: ¿la firma se verifica en una función importada?
-- `SUPABASE_SIN_RLS`: si no lo encuentras activado en ninguna migración, repórtalo y pide confirmar en el panel de Supabase.
+- `SUPABASE_SIN_RLS` / `BD_SIN_RLS`: si no lo encuentras activado en ninguna migración, repórtalo y pide confirmar en el panel.
+- `SQL_INYECCION`: confirma que el texto pegado en la consulta viene del cliente (`req.query`, `req.body`, un formulario). Si es una constante del código, descártalo.
+
+**Diagnóstico de la base de datos: depende del motor.** Lee `bases_de_datos.modelo` y `references/bases-de-datos.md` antes de escribir sobre la base.
+- **Supabase, PostgREST o Hasura:** el navegador consulta la base directo, así que **RLS y las políticas son la protección principal**.
+- **Firebase:** la protección son las reglas de seguridad.
+- **PostgreSQL, SQL Server o MySQL usados desde el backend:** solo el servidor de la app se conecta. **No digas "falta RLS" ni recomiendes activarlo.** Revisa lo que de verdad protege:
+  - que la contraseña de la base no esté en el código ni en git;
+  - que las consultas usen parámetros (inyección SQL);
+  - que la app no use `postgres`, `sa` o `root`;
+  - que el puerto no esté abierto a internet;
+  - que la conexión vaya cifrada si la base está en otro servidor.
+- Nombra el motor real en el reporte ("tu base PostgreSQL", "tu SQL Server"), con los pasos y comandos de ese motor.
 - `LLM_*`: ¿las herramientas del bot tienen límites en código (monto máximo, solo pedidos del cliente logueado)?
 
 Descartar un falso positivo es tan importante como encontrar un problema real. Un reporte con alarmas falsas hace que el alumno deje de confiar en él.
@@ -133,7 +146,12 @@ El entregable es **`SEGURIDAD-REPORTE.html`** en la raíz del proyecto: una pág
 python3 <ruta-del-skill>/scripts/generar_reporte.py /tmp/hallazgos-finales.json <carpeta-del-proyecto>/SEGURIDAD-REPORTE.html
 ```
 
-3. Muestra en el chat un resumen corto (veredicto, número de problemas por gravedad y qué hacer primero) y la ruta del HTML para que lo abra en el navegador.
+3. **Entrega el HTML dentro del chat, como archivo adjunto.** No le digas al alumno que vaya a una carpeta a buscarlo. Según dónde estés:
+   - **Claude (app de escritorio, Cowork, claude.ai):** usa la herramienta para enviar archivos al usuario (`SendUserFile`, `present_files` o la que tenga tu entorno) con la ruta del HTML.
+   - **Hermes en Telegram, Discord, Slack, WhatsApp o Signal:** escribe en tu respuesta una línea propia con `MEDIA:` seguido de la ruta absoluta del archivo, por ejemplo: MEDIA:/root/tienda/SEGURIDAD-REPORTE.html. Escríbela como texto normal, sin comillas invertidas ni bloque de código, porque Hermes ignora las rutas que están dentro de código. El gateway de Hermes lo detecta y lo sube como adjunto. Si Hermes corre con terminal en Docker, el archivo tiene que estar en una ruta que el gateway pueda leer en el servidor (por ejemplo dentro de `~/.hermes/`). Si no, cópialo ahí antes.
+   - **Solo si tu entorno no puede enviar archivos** (por ejemplo, una terminal sin adjuntos), da la ruta y cómo abrirlo, y ofrece pegar el resumen en el chat.
+
+   Junto al archivo, escribe un resumen corto: el veredicto, el número de problemas por gravedad y qué hacer primero.
 
 **Cómo escribir `instrucciones_ia`.** El script la envuelve en un prompt completo: problema, dónde, qué pasa y reglas como "no escribas llaves en el código" o "explícame qué cambiaste". Así que aquí va solo **qué cambiar**, nombrando archivos, funciones y variables reales del proyecto. Un agente (Claude Code, Hermes o Codex) que lea solo ese prompt, sin ver el reporte, debe poder arreglarlo. Mal: "arregla la seguridad del webhook". Bien: "En app/api/webhooks/stripe/route.ts lee el cuerpo con request.text() y valida con stripe.webhooks.constructEvent usando process.env.STRIPE_WEBHOOK_SECRET; si falla responde 400". Usa `references/correcciones.md` como base.
 
