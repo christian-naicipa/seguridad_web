@@ -73,17 +73,31 @@ def e(t):
     return html.escape(str(t or ""), quote=True)
 
 
-def construir_prompt(h, proyecto):
-    lineas = [
-        "Arregla este problema de seguridad en mi proyecto%s." % (" \"%s\"" % proyecto if proyecto else ""),
-        "",
-        "PROBLEMA: %s" % h.get("titulo", ""),
-    ]
+def construir_prompt(h, proyecto, conexion=None):
+    servidor = h.get("grupo") == "servidor"
+    if servidor:
+        inicio = "Arregla este problema de seguridad en mi servidor (VPS)%s." % (
+            ". Me conecto con: %s" % conexion if conexion else "")
+    else:
+        inicio = "Arregla este problema de seguridad en mi proyecto%s." % (" \"%s\"" % proyecto if proyecto else "")
+    lineas = [inicio, "", "PROBLEMA: %s" % h.get("titulo", "")]
     if h.get("donde"):
         lineas.append("DÓNDE: %s" % h["donde"])
     if h.get("que_pasa"):
         lineas.append("QUÉ PASA: %s" % h["que_pasa"])
     lineas += ["", "QUÉ HAY QUE HACER:", h.get("instrucciones_ia") or "\n".join("- " + p for p in h.get("pasos", []))]
+    if servidor:
+        lineas += [
+            "",
+            "REGLAS:",
+            "- Primero revisa el estado actual (solo lectura) y explícame qué vas a cambiar antes de hacerlo.",
+            "- Antes de editar un archivo de configuración, haz una copia de respaldo (.bak).",
+            "- Si tocas SSH o el firewall: NO cierres la sesión actual. Comprueba que puedo entrar en una segunda "
+            "conexión antes de terminar, para no quedarme fuera de mi servidor.",
+            "- Cambia solo lo necesario para este problema y no reinicies servicios sin avisarme.",
+            "- Al terminar, explícame en palabras simples qué cambiaste y cómo compruebo que quedó arreglado.",
+        ]
+        return "\n".join(lineas)
     lineas += [
         "",
         "REGLAS:",
@@ -170,6 +184,13 @@ font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card)
 .check input{width:18px;height:18px;margin-top:3px;accent-color:var(--ok);flex:0 0 auto}
 .check input:checked+span{text-decoration:line-through;color:var(--sub)}
 .limites{font-size:14px;color:var(--sub)}
+.etq{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--sub);
+border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:8px;vertical-align:2px}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.info div{background:var(--code);border-radius:10px;padding:10px 14px}
+.info small{display:block;color:var(--sub);font-size:12px}
+.info b{font-size:15px;font-weight:600;word-break:break-word}
+.grupo{margin:28px 0 0;font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--sub)}
 .vacio{text-align:center;color:var(--sub);padding:28px}
 footer{margin-top:40px;font-size:13px;color:var(--sub);text-align:center}
 @media (max-width:640px){.wrap{padding:24px 16px 48px}h1{font-size:24px}.conteos{grid-template-columns:repeat(2,1fr)}
@@ -237,6 +258,14 @@ def generar(datos):
             p.append('<li><b>%s</b>: %s</li>' % (e(r.get("llave")), e(r.get("donde"))))
         p.append('</ul></section>')
 
+    # Datos del servidor
+    info = datos.get("servidor_info") or {}
+    if info:
+        p.append('<div class="seccion"><h2>Tu servidor</h2></div><section class="card"><div class="info">')
+        for k, v in info.items():
+            p.append('<div><small>%s</small><b>%s</b></div>' % (e(k), e(v)))
+        p.append('</div></section>')
+
     # Hallazgos
     p.append('<div class="seccion"><h2>Problemas encontrados</h2>')
     if total:
@@ -248,11 +277,20 @@ def generar(datos):
     p.append('</div>')
     if not hallazgos:
         p.append('<div class="card vacio">No se encontraron problemas de seguridad en lo revisado.</div>')
+    grupos = [g for g in ("servidor", "codigo") if any((h.get("grupo") or "codigo") == g for h in hallazgos)]
+    if len(grupos) > 1:
+        hallazgos = [h for g in grupos for h in hallazgos if (h.get("grupo") or "codigo") == g]
+    grupo_actual = None
     for i, h in enumerate(hallazgos, 1):
+        g = h.get("grupo") or "codigo"
+        if len(grupos) > 1 and g != grupo_actual:
+            grupo_actual = g
+            p.append('<h3 class="grupo">%s</h3>' % ("Tu servidor" if g == "servidor" else "Tu código"))
         s = h.get("severidad") if h.get("severidad") in SEV else "baja"
         nombre, cls = SEV[s]
         p.append('<article class="card vuln" data-sev="%s" style="--c:var(--%s);--cbg:var(--%s-bg)">' % (s, cls, cls))
-        p.append('<div class="cabeza"><h3>%d. %s</h3><span class="pill">%s</span></div>' % (i, e(h.get("titulo")), nombre))
+        etq = '<span class="etq">%s</span>' % ("Servidor" if g == "servidor" else "Código") if len(grupos) > 1 else ""
+        p.append('<div class="cabeza"><h3>%d. %s%s</h3><span class="pill">%s</span></div>' % (i, e(h.get("titulo")), etq, nombre))
         if h.get("donde"):
             p.append('<span class="donde">%s</span>' % e(h["donde"]))
         p.append('<div class="dos"><div><h4>Qué pasa</h4><p>%s</p></div><div><h4>Qué podría hacer un atacante</h4><p>%s</p></div></div>'
@@ -263,7 +301,7 @@ def generar(datos):
         pid = "prompt-%d" % i
         p.append('<div class="prompt"><div class="prompt-top"><span><b>Prompt para arreglarlo</b> · '
                  'Claude Code, Hermes o Codex</span><button class="copiar" data-for="%s">Copiar</button></div>'
-                 '<pre id="%s">%s</pre></div></article>' % (pid, pid, e(construir_prompt(h, datos.get("proyecto")))))
+                 '<pre id="%s">%s</pre></div></article>' % (pid, pid, e(construir_prompt(h, datos.get("proyecto"), datos.get("conexion")))))
 
     if datos.get("bien"):
         p.append('<div class="seccion"><h2>Lo que está bien</h2></div><section class="card"><ul class="lista">')

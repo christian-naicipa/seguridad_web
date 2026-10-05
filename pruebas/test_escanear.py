@@ -166,5 +166,113 @@ class PruebasEscaner(unittest.TestCase):
         self.assertTrue(any("anon key" in m for m in d["verificaciones_manuales"]))
 
 
+class PruebasServidor(unittest.TestCase):
+    """Modo VPS: servidores simulados (carpetas con /etc, /tmp... y salidas de comandos)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        import tempfile
+        cls.tmp = tempfile.mkdtemp(prefix="servidores-")  # disco del sistema: respeta permisos de archivos
+        subprocess.run([sys.executable, os.path.join(AQUI, "crear_servidores.py"), cls.tmp], check=True, capture_output=True)
+        subprocess.run([sys.executable, os.path.join(AQUI, "crear_apps.py")], check=True, capture_output=True)
+        # el VPS vulnerable aloja la tienda vulnerable
+        shutil.copytree(os.path.join(APPS, "tienda-nextjs-supabase"),
+                        os.path.join(cls.tmp, "servidor-vulnerable", "var", "www", "tienda"), dirs_exist_ok=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def escanear_servidor(self, nombre):
+        raiz = os.path.join(self.tmp, nombre)
+        r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "escanear_servidor.py"), "--raiz", raiz,
+                            "--simular", os.path.join(raiz, "_comandos")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_servidor_vulnerable(self):
+        d = self.escanear_servidor("servidor-vulnerable")
+        reglas = [h["regla"] for h in d["hallazgos"]]
+        for regla in ["DOCKER_BD_PUBLICA", "BD_EXPUESTA", "DOCKER_PANEL_PUBLICO", "SSH_ROOT_CON_PASSWORD", "SIN_FAIL2BAN",
+                      "FIREWALL_INACTIVO", "USUARIO_UID0", "USUARIO_SIN_PASSWORD", "PROCESO_SOSPECHOSO", "CRON_SOSPECHOSO",
+                      "LD_PRELOAD", "SERVICIO_SOSPECHOSO", "EJECUTABLE_EN_TMP", "NGINX_SIRVE_OCULTOS", "ENV_LEGIBLE",
+                      "PARCHES_PENDIENTES", "REINICIO_PENDIENTE", "SIN_ACTUALIZACIONES_AUTO", "DISCO_LLENO",
+                      "CERTIFICADO_POR_VENCER", "SIN_BACKUP", "DOCKER_SOCKET_MONTADO", "NGINX_VERSION"]:
+            self.assertIn(regla, reglas, "no detectó %s" % regla)
+        self.assertEqual(reglas.count("DOCKER_BD_PUBLICA"), 1, "Redis en IPv4 e IPv6 es un solo problema")
+        self.assertNotIn("CPU_ALTA", reglas, "el minero ya está reportado como proceso sospechoso")
+        # Portainer necesita docker.sock y modo privilegiado: no es falsa alarma
+        self.assertFalse(any("portainer" in (h["archivo"] or "") and h["regla"] in ("DOCKER_SOCKET_MONTADO", "DOCKER_PRIVILEGIADO")
+                             for h in d["hallazgos"]))
+        self.assertEqual(d["inventario"]["sistema"]["intentos_ssh_fallidos_24h"], 18342)
+        self.assertEqual(len(d["inventario"]["llaves_ssh_autorizadas"]), 2)
+        self.assertNotIn("AAAAC3", json.dumps(d), "nunca debe mostrar el contenido de una llave SSH")
+        self.assertIn("/var/www/tienda", d["inventario"]["apps_detectadas"])
+
+    def test_servidor_seguro_sin_falsas_alarmas(self):
+        d = self.escanear_servidor("servidor-seguro")
+        graves = [h for h in d["hallazgos"] if h["severidad"] in ("critica", "alta", "media")]
+        self.assertEqual(graves, [], "falsas alarmas en el servidor seguro: %s" % graves)
+        self.assertEqual(d["notas"], [])
+
+    def test_auditar_vps_flujo_completo(self):
+        import glob as g
+        import socket
+        antes = set(g.glob("/tmp/auditoria-seguridad-*"))
+        control = socket.socket()
+        control.bind(("127.0.0.1", 0))
+        control.listen(5)
+        try:
+            raiz = os.path.join(self.tmp, "servidor-vulnerable")
+            r = subprocess.run([sys.executable, os.path.join(SCRIPTS, "auditar_vps.py"), "alumno@127.0.0.1", "--local",
+                                "--args-servidor", "--raiz %s --simular %s" % (raiz, os.path.join(raiz, "_comandos")),
+                                "--raiz-apps", raiz, "--puerto-control", str(control.getsockname()[1])],
+                               capture_output=True, text=True, timeout=180)
+        finally:
+            control.close()
+        self.assertEqual(r.returncode, 0, r.stdout[-500:] + r.stderr[-500:])
+        d = json.loads(r.stdout)
+        self.assertTrue(d["servidor"]["hallazgos"])
+        tienda = [a for a in d["apps"] if a["ruta"] == "/var/www/tienda"]
+        self.assertTrue(tienda and tienda[0]["resultado"]["resumen"]["critica"] > 0, "debe revisar el código de la app")
+        self.assertTrue(all(h.get("grupo") == "codigo" for h in tienda[0]["resultado"]["hallazgos"]))
+        self.assertIn("5432", d["puertos_desde_internet"], "debe probar los puertos desde fuera")
+        self.assertEqual(set(g.glob("/tmp/auditoria-seguridad-*")), antes, "debe borrar la carpeta temporal")
+
+    def test_ajuste_por_sondeo(self):
+        sys.path.insert(0, SCRIPTS)
+        from auditar_vps import ajustar_por_sondeo
+        hs = [{"regla": "BD_ESCUCHA_PUBLICA", "severidad": "baja", "confianza": "revisar", "puerto": 5432,
+               "titulo": "PostgreSQL escucha en todas las interfaces, pero el firewall lo bloquea (puerto 5432)", "detalle": ""},
+              {"regla": "DOCKER_BD_PUBLICA", "severidad": "critica", "confianza": "confirmado", "puerto": 6379,
+               "titulo": "Redis publicado", "detalle": ""}]
+        ajustar_por_sondeo(hs, {5432: True, 6379: False})
+        self.assertEqual(hs[0]["severidad"], "critica", "si responde desde internet, es crítico")
+        self.assertEqual(hs[1]["severidad"], "media", "si no responde, baja a medio pero no desaparece")
+        self.assertEqual(hs[1]["confianza"], "revisar")
+
+    def test_reporte_con_servidor(self):
+        import tempfile
+        datos = {"proyecto": "tienda", "conexion": "ssh deploy@203.0.113.10",
+                 "servidor_info": {"Sistema": "Ubuntu 22.04", "Intentos de entrar por SSH (24 h)": "18.342"},
+                 "hallazgos": [{"severidad": "critica", "grupo": "servidor", "titulo": "Se puede entrar como root con contraseña"},
+                               {"severidad": "alta", "grupo": "codigo", "titulo": "Precio desde el navegador"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            entrada, salida = os.path.join(tmp, "h.json"), os.path.join(tmp, "r.html")
+            with open(entrada, "w", encoding="utf-8") as f:
+                json.dump(datos, f)
+            subprocess.run([sys.executable, os.path.join(SCRIPTS, "generar_reporte.py"), entrada, salida], check=True,
+                           capture_output=True)
+            with open(salida, encoding="utf-8") as f:
+                h = f.read()
+        self.assertIn("Tu servidor", h)
+        self.assertIn("Tu código", h)
+        self.assertIn("18.342", h)
+        self.assertIn("ssh deploy@203.0.113.10", h)
+        self.assertIn("NO cierres la sesión actual", h)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

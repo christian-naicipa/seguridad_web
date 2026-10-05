@@ -116,7 +116,7 @@ class Escaner:
 
     def git(self, *args):
         try:
-            r = subprocess.run(["git", *args], cwd=self.raiz, capture_output=True, text=True, timeout=60)
+            r = subprocess.run(["git", *args], cwd=self.raiz, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
             return r.stdout if r.returncode == 0 else None
         except Exception:
             return None
@@ -653,8 +653,8 @@ class Escaner:
         lock = os.path.join(self.raiz, "package-lock.json")
         if os.path.exists(lock) and self.usar_red:
             try:
-                r = subprocess.run(["npm", "audit", "--json", "--omit=dev"], cwd=self.raiz, capture_output=True,
-                                   text=True, timeout=120)
+                r = subprocess.run(["npm", "audit", "--json", "--omit=dev"], cwd=self.raiz, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, universal_newlines=True, timeout=120)
                 datos = json.loads(r.stdout or "{}")
                 vulns = datos.get("vulnerabilities") or {}
                 for nombre, info in vulns.items():

@@ -1,0 +1,78 @@
+{
+  "proyecto": "mi-tienda",
+  "fecha": "2026-10-05",
+  "revisado": ["Servidor VPS (Hetzner)", "Código en /var/www/tienda"],
+  "conexion": "ssh root@203.0.113.10",
+  "veredicto": "Tu servidor fue hackeado",
+  "resumen": "Hay un programa minando criptomonedas en tu servidor y una tarea que lo reinstala cada 5 minutos. Además, tu base de datos Redis y el acceso como root con contraseña están abiertos a internet. Primero sigue los pasos de \"Haz esto hoy\" y después arregla el resto en orden.",
+  "rotar_hoy": [
+    {"llave": "Contraseña de root y del panel de Hetzner", "donde": "console.hetzner.cloud → Security, desde otra computadora"},
+    {"llave": "Stripe (sk_live)", "donde": "dashboard.stripe.com → Developers → API keys → Roll key"},
+    {"llave": "Base de datos (DATABASE_URL)", "donde": "Cambiar la contraseña del usuario de PostgreSQL y actualizar el .env"}
+  ],
+  "servidor_info": {
+    "Sistema": "Ubuntu 22.04",
+    "Puertos abiertos a internet": "22, 80, 443, 5432, 6379, 5678",
+    "Intentos de entrar por SSH (24 h)": "18.342",
+    "Contenedores Docker": "4"
+  },
+  "hallazgos": [
+    {
+      "grupo": "servidor", "severidad": "critica",
+      "titulo": "Hay un minero de criptomonedas corriendo en tu servidor",
+      "donde": "/tmp/.x/kdevtmpfsi · proceso 4242 (www-data) · 398% de CPU",
+      "que_pasa": "Un programa escondido en una carpeta temporal está usando casi toda la CPU. Una tarea programada lo vuelve a descargar cada 5 minutos y un servicio lo arranca al reiniciar.",
+      "riesgo": "Ya tienen control de tu servidor: pueden leer tus llaves, tu base de datos y los datos de tus clientes.",
+      "pasos": ["Toma un snapshot del VPS desde el panel de Hetzner.", "Cambia las contraseñas desde otra computadora.", "Lo más seguro: crea un VPS nuevo y migra la tienda desde git."],
+      "instrucciones_ia": "Crea /root/incidente y guarda copia de /tmp/.x/kdevtmpfsi, /etc/cron.d/sync, /etc/systemd/system/dbus-update.service y /etc/ld.so.preload. Muéstrame cada cosa antes de borrarla. Luego detén y deshabilita dbus-update.service, mata el proceso 4242, borra el binario, /etc/cron.d/sync y /etc/ld.so.preload, y elimina el usuario sysadm (UID 0). Al final lista los archivos modificados en los últimos 7 días en /etc, /usr/local/bin y /tmp."
+    },
+    {
+      "grupo": "servidor", "severidad": "critica",
+      "titulo": "Tu base de datos Redis está abierta a internet",
+      "donde": "contenedor redis · puerto 6379",
+      "que_pasa": "Docker publica el puerto 6379 a todo internet, y Docker se salta el firewall.",
+      "riesgo": "Leer o borrar los datos, y muchas veces tomar control del servidor. Es una de las formas más comunes de entrada.",
+      "pasos": ["En docker-compose.yml quita 'ports' de redis (o usa 127.0.0.1:6379:6379).", "Ejecuta docker compose up -d."],
+      "instrucciones_ia": "En el docker-compose.yml del servicio redis elimina la sección ports (la app accede por la red interna de Docker) o cámbiala a 127.0.0.1:6379:6379. Aplica con docker compose up -d redis y verifica con 'ss -tlnp | grep 6379' que ya no aparezca en 0.0.0.0."
+    },
+    {
+      "grupo": "servidor", "severidad": "critica",
+      "titulo": "Se puede entrar como root con contraseña",
+      "donde": "/etc/ssh/sshd_config",
+      "que_pasa": "Ayer hubo 18.342 intentos de adivinar tu contraseña.",
+      "riesgo": "Si la adivinan, tienen el servidor completo.",
+      "pasos": ["Configura una llave SSH en tu computadora (ssh-copy-id).", "Desactiva el acceso con contraseña.", "Prueba entrar en otra terminal antes de cerrar la actual."],
+      "instrucciones_ia": "Verifica que entro con llave SSH. Crea /etc/ssh/sshd_config.d/00-seguridad.conf con PasswordAuthentication no, KbdInteractiveAuthentication no y PermitRootLogin prohibit-password; valida con sshd -t y recarga con systemctl reload ssh. Instala fail2ban."
+    },
+    {
+      "grupo": "servidor", "severidad": "alta",
+      "titulo": "El firewall del servidor está apagado",
+      "donde": "ufw status: inactive",
+      "que_pasa": "Cualquier programa que abra un puerto queda expuesto a internet.",
+      "riesgo": "PostgreSQL (5432) y n8n (5678) hoy se pueden alcanzar desde cualquier lugar.",
+      "pasos": ["Permite SSH, 80 y 443.", "Activa ufw."],
+      "instrucciones_ia": "Configura ufw en este orden: default deny incoming, default allow outgoing, allow OpenSSH, allow 80/tcp, allow 443/tcp, y luego enable. Antes de activarlo confirma que la regla de SSH está creada."
+    },
+    {
+      "grupo": "codigo", "severidad": "critica",
+      "titulo": "El cliente puede elegir cuánto pagar",
+      "donde": "/var/www/tienda/app/api/checkout/route.ts:9",
+      "que_pasa": "El precio del cobro viene de lo que envía el navegador.",
+      "riesgo": "Comprar un producto de $100 pagando $0,01.",
+      "pasos": ["El navegador solo envía el id del producto y la cantidad.", "El servidor busca el precio en la base de datos."],
+      "instrucciones_ia": "En app/api/checkout/route.ts recibe solo productId y quantity, busca name y price_cents en la tabla products, valida quantity entre 1 y 10 y usa ese precio en unit_amount."
+    },
+    {
+      "grupo": "servidor", "severidad": "media",
+      "titulo": "No hay copias de seguridad automáticas",
+      "donde": "cron / systemd timers",
+      "que_pasa": "No se encontró ninguna tarea de backup.",
+      "riesgo": "Si borran la base de datos, no hay cómo recuperarla.",
+      "pasos": ["Activa los backups de Hetzner.", "Programa un pg_dump diario que se suba fuera del servidor."],
+      "instrucciones_ia": "Crea /usr/local/bin/backup-db.sh con pg_dump comprimido por fecha en /var/backups/db, borrando los de más de 14 días, súbelo con rclone al destino que te indique y prográmalo en cron a las 3 AM. Usa ~/.pgpass con permisos 600."
+    }
+  ],
+  "bien": ["El certificado HTTPS se renueva automáticamente.", "El código de la tienda lee la llave de Stripe desde una variable de entorno."],
+  "manual": ["Revisa en el panel de Hetzner (Firewalls) que solo estén abiertos los puertos 22, 80 y 443.", "Llaves SSH con acceso: christian@macbook (root), freelancer-2023 (root). Si no reconoces alguna, bórrala.", "Activa la verificación en dos pasos en Hetzner."],
+  "limites": ["Se revisó el servidor por SSH con permisos de root.", "El código dentro de imágenes Docker no se revisó: solo el de /var/www/tienda."]
+}

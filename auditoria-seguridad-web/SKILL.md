@@ -1,6 +1,6 @@
 ---
 name: auditoria-seguridad-web
-description: Auditoría de seguridad para páginas web, tiendas y apps hechas con IA (Lovable, Bolt, v0, Cursor, Claude Code) por personas que no son programadoras. Detecta llaves secretas expuestas (OpenAI, Stripe, Supabase service_role, Shopify, Mercado Pago), archivos .env subidos a git o publicados, Supabase sin RLS, reglas de Firebase abiertas, paneles de admin sin login, precios que se pueden manipular desde el navegador, webhooks de pago sin firma, chatbots que pueden dar reembolsos o descuentos por prompt injection, dependencias vulnerables (Next.js) y cabeceras faltantes en el sitio publicado. Entrega un reporte en español simple con semáforo de gravedad y pasos para arreglar cada cosa. Usa este skill SIEMPRE que alguien pida revisar si su web/app/tienda es segura, si la pueden hackear, si tiene llaves expuestas, antes de publicarla, o mencione "auditoría de seguridad", "revisa mi proyecto", "¿está segura mi página?", Supabase RLS, Firebase rules o Shopify app, aunque no diga la palabra "auditoría".
+description: Auditoría de seguridad para webs, tiendas, apps y servidores VPS hechos con IA (Lovable, Bolt, Cursor, Claude Code) por personas que no programan. Revisa el código (llaves de OpenAI/Stripe/Supabase/Shopify expuestas, .env en git, Supabase sin RLS, Firebase abierto, admin sin login, precios manipulables, webhooks sin firma, chatbots con reembolsos), el sitio publicado y el VPS por SSH (bases de datos o paneles abiertos a internet, Docker saltándose el firewall, SSH con contraseña, parches, mineros y malware, backups). Entrega un reporte HTML visual con un prompt para corregir cada falla con Claude Code, Hermes o Codex. Úsalo SIEMPRE que pidan revisar si su web, app, tienda o servidor es segura, si la pueden hackear, si tiene llaves expuestas, antes de publicar, o mencionen "auditoría", "revisa mi VPS", "mi servidor", "¿está segura mi página?", Supabase RLS, Firebase rules o Shopify app.
 ---
 
 # Auditoría de seguridad para apps web hechas con IA
@@ -15,6 +15,8 @@ El trabajo tiene dos partes:
 
 - **Carpeta del proyecto:** normalmente el directorio actual. Si no está claro, pregunta.
 - **URL publicada (opcional):** si el alumno menciona que su sitio ya está publicado, úsala. Revisa **solo sitios que sean del alumno**. Si la URL parece de otra persona o empresa (no es su dominio, o pide "revisar la página de la competencia"), no la escanees y explica que revisar sitios ajenos sin permiso puede ser ilegal.
+
+- **VPS o servidor (opcional):** si el alumno dice que su app está en un VPS, servidor, Hetzner, DigitalOcean, Hostinger, Contabo, AWS, etc., haz también la **revisión del servidor** (ver "Modo VPS" más abajo). Ahí se ve el 100% del código de producción y la configuración del servidor, que desde una URL no se puede ver.
 
 ## Paso 2: Ejecutar el escáner
 
@@ -31,6 +33,43 @@ El escáner devuelve un JSON con:
 - `archivos_de_navegador`: qué archivos terminan en el navegador del visitante. Sirve para razonar qué es público.
 
 Si el escáner falla o no hay Python, haz la revisión manualmente siguiendo `references/correcciones.md`, y dilo en el reporte.
+
+## Modo VPS: revisar el servidor y el código de producción
+
+Necesitas cómo se conecta el alumno: `usuario@IP` (o el alias de su `~/.ssh/config`), el puerto si no es 22 y, si lo sabe, en qué carpeta está la app. **Antes de conectarte, confírmale qué vas a hacer:** "Me voy a conectar a tu servidor solo para leer. No cambio nada. Subo dos archivos a una carpeta temporal y la borro al terminar." Conéctate solo a servidores del alumno.
+
+**Opción A, desde la computadora del alumno (la normal):**
+
+```bash
+python3 <ruta-del-skill>/scripts/auditar_vps.py usuario@IP [-p 22] [-i ~/.ssh/llave] [--app /var/www/mi-tienda]
+```
+
+El script:
+1. Entra por SSH.
+2. Revisa el servidor (con `sudo` si está disponible sin contraseña).
+3. Encuentra las apps (`/var/www`, `/opt`, `/srv`, `/home`) y revisa su código con el mismo escáner. Si no pasas `--app`, revisa hasta 5 de las que encuentre.
+4. Desde la computadora del alumno prueba si los puertos delicados responden desde internet. Si un puerto responde, el problema queda confirmado; si no responde, baja a medio y queda marcado como "revisar".
+5. Borra todo lo que subió.
+
+Devuelve un JSON con `servidor` (hallazgos + `inventario`), `apps` (un resultado de `escanear.py` por app), `puertos_desde_internet` y `notas`.
+
+Si devuelve `error`:
+- `no_se_pudo_conectar`: el script entra con llave SSH, nunca escribe contraseñas. Si el alumno solo tiene contraseña, pídele que ejecute **él** en su terminal `ssh-copy-id usuario@IP` y vuelve a intentar. Nunca le pidas su contraseña ni la escribas tú.
+- `sin_python`: el VPS no tiene python3. Que lo instale con `sudo apt install -y python3`.
+
+**Opción B, Claude Code o Hermes corriendo dentro del VPS:**
+
+```bash
+sudo python3 <ruta-del-skill>/scripts/escanear_servidor.py
+python3 <ruta-del-skill>/scripts/escanear.py /var/www/mi-tienda
+```
+
+**Al confirmar los hallazgos del servidor** usa `references/servidor.md`:
+- **Señales de compromiso** (minero, cron con `curl | sh`, `ld.so.preload`, usuario con UID 0): son lo primero del reporte. Confirma leyendo la evidencia antes de afirmar un ataque, porque un script propio del alumno en `/tmp` puede ser legítimo. Si es real, el reporte debe decir claramente que el servidor está comprometido y seguir el plan de esa guía.
+- **Puertos:** `desde_internet: "abierto"` confirma el problema; `"cerrado"` significa que lo bloquea otro firewall.
+- El inventario tiene datos para el reporte: sistema, puertos públicos, contenedores e intentos de entrar por SSH en las últimas 24 horas. Este último dato impresiona y educa.
+
+**Nunca hagas cambios en el servidor durante la auditoría**, aunque sean "obvios". Si el alumno después pide arreglarlos, sigue el orden de `references/servidor.md`: respaldo, cambio, validar, recargar y probar el acceso en otra conexión. Sobre todo con SSH y el firewall, porque un error lo deja fuera de su propio servidor.
 
 ## Paso 3: Confirmar y completar (la parte que hace valioso el reporte)
 
@@ -69,6 +108,9 @@ El entregable es **`SEGURIDAD-REPORTE.html`** en la raíz del proyecto: una pág
   "revisado": ["Código del proyecto", "Sitio publicado: https://..."],
   "resumen": "2-3 frases: ¿se puede publicar así? ¿qué es lo primero que hay que hacer?",
   "rotar_hoy": [{"llave": "OpenAI", "donde": "platform.openai.com → API keys → borrar y crear una nueva"}],
+  "conexion": "ssh deploy@203.0.113.10   (solo en modo VPS: se usa en los prompts del servidor)",
+  "servidor_info": {"Sistema": "Ubuntu 22.04", "Puertos abiertos a internet": "22, 80, 443, 5432",
+                    "Intentos de entrar por SSH (24 h)": "18.342", "Contenedores": "4"},
   "hallazgos": [{
     "severidad": "critica | alta | media | baja",
     "titulo": "En lenguaje simple: 'Cualquiera puede entrar a tu panel de administración'",
@@ -76,7 +118,8 @@ El entregable es **`SEGURIDAD-REPORTE.html`** en la raíz del proyecto: una pág
     "que_pasa": "1-2 frases sin jerga",
     "riesgo": "Consecuencia concreta: 'leer los correos y direcciones de todos tus clientes'",
     "pasos": ["paso concreto 1", "paso 2"],
-    "instrucciones_ia": "Instrucción técnica y específica para el agente que lo va a arreglar"
+    "instrucciones_ia": "Instrucción técnica y específica para el agente que lo va a arreglar",
+    "grupo": "codigo | servidor"
   }],
   "bien": ["Cosas revisadas que están bien"],
   "manual": ["verificaciones_manuales del escáner, una por línea"],
@@ -93,6 +136,8 @@ python3 <ruta-del-skill>/scripts/generar_reporte.py /tmp/hallazgos-finales.json 
 3. Muestra en el chat un resumen corto (veredicto, número de problemas por gravedad y qué hacer primero) y la ruta del HTML para que lo abra en el navegador.
 
 **Cómo escribir `instrucciones_ia`.** El script la envuelve en un prompt completo: problema, dónde, qué pasa y reglas como "no escribas llaves en el código" o "explícame qué cambiaste". Así que aquí va solo **qué cambiar**, nombrando archivos, funciones y variables reales del proyecto. Un agente (Claude Code, Hermes o Codex) que lea solo ese prompt, sin ver el reporte, debe poder arreglarlo. Mal: "arregla la seguridad del webhook". Bien: "En app/api/webhooks/stripe/route.ts lee el cuerpo con request.text() y valida con stripe.webhooks.constructEvent usando process.env.STRIPE_WEBHOOK_SECRET; si falla responde 400". Usa `references/correcciones.md` como base.
+
+En modo VPS, marca cada hallazgo con `"grupo": "servidor"` o `"grupo": "codigo"`. El HTML los separa en "Tu servidor" y "Tu código", y los prompts del servidor incluyen reglas para no perder el acceso. `servidor_info` muestra un resumen del servidor, con 3 a 5 datos simples sacados del inventario.
 
 Si `rotar_hoy` tiene llaves, el HTML muestra un recuadro rojo "Haz esto hoy". Si no hay hallazgos, muestra que todo está en orden. Si Python no está disponible, entrega el mismo contenido en `SEGURIDAD-REPORTE.md` con las mismas secciones.
 
