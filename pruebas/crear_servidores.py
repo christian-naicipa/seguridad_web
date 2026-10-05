@@ -45,12 +45,16 @@ def servidor_vulnerable(base):
         'LISTEN 0 4096 0.0.0.0:5678 0.0.0.0:* users:(("docker-proxy",pid=1600,fd=4))',
         'LISTEN 0 4096 0.0.0.0:9443 0.0.0.0:* users:(("docker-proxy",pid=1700,fd=4))',
         'LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=2000,fd=20))',
+        # escuchando solo en la VPN (WireGuard): NO es accesible desde internet
+        'LISTEN 0 244 10.8.0.1:5433 0.0.0.0:* users:(("postgres",pid=1250,fd=6))',
+        'LISTEN 0 4096 10.8.0.1:6380 0.0.0.0:*',
     ]) + "\n")
     escribir(base, c + "docker_ps.txt", "\n".join([
         "redis\tredis:7\t0.0.0.0:6379->6379/tcp, :::6379->6379/tcp",
         "n8n\tn8nio/n8n:latest\t0.0.0.0:5678->5678/tcp",
         "portainer\tportainer/portainer-ce:latest\t0.0.0.0:9443->9443/tcp",
         "tienda\tmi-tienda:latest\t127.0.0.1:3000->3000/tcp",
+        "pg-vpn\tpostgres:16\t10.8.0.1:5434->5432/tcp",
     ]) + "\n")
     escribir(base, c + "docker_inspect.txt", "\n".join([
         "/redis\tfalse\t/var/lib/docker/volumes/redis/_data;",
@@ -96,6 +100,8 @@ def servidor_vulnerable(base):
     escribir(base, c + "df.txt", "Filesystem 1024-blocks Used Available Capacity Mounted on\n"
                                  "/dev/sda1 40000000 37200000 2800000 93% /\n")
     escribir(base, c + "timers.txt", "Mon 2026-10-06 00:00:00 UTC 10h left - - logrotate.timer logrotate.service\n")
+    # copia vieja que nada usa (no debe auditarse como si fuera producción)
+    escribir(base, "/opt/viejo/package.json", '{"name":"viejo","dependencies":{"next":"15.1.4"}}\n')
     escribir(base, "/etc/postgresql/14/main/pg_hba.conf", "local   all   postgres   peer\n"
                                                           "host    all   all        0.0.0.0/0   trust\n")
 

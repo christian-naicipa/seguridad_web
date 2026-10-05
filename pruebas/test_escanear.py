@@ -211,6 +211,16 @@ class PruebasServidor(unittest.TestCase):
         self.assertEqual(len(d["inventario"]["llaves_ssh_autorizadas"]), 2)
         self.assertNotIn("AAAAC3", json.dumps(d), "nunca debe mostrar el contenido de una llave SSH")
         self.assertIn("/var/www/tienda", d["inventario"]["apps_detectadas"])
+        # IP privada / VPN (WireGuard): no es "abierto a internet"
+        self.assertFalse([h for h in d["hallazgos"] if h.get("puerto") in (5433, 5434, 6380)],
+                         "un puerto que escucha solo en 10.8.0.1 no está expuesto a internet")
+        privados = {x["puerto"] for x in d["inventario"]["puertos_red_privada"]}
+        self.assertTrue({5433, 5434, 6380} <= privados)
+        # apps en uso vs. copias viejas
+        apps = {a["ruta"]: a for a in d["inventario"]["apps"]}
+        self.assertTrue(apps["/var/www/tienda"]["en_uso"])
+        self.assertIs(apps["/opt/viejo"]["en_uso"], False)
+        self.assertTrue(any("/opt/viejo" in n for n in d["notas"]))
 
     def test_servidor_seguro_sin_falsas_alarmas(self):
         d = self.escanear_servidor("servidor-seguro")
@@ -240,6 +250,8 @@ class PruebasServidor(unittest.TestCase):
         self.assertTrue(tienda and tienda[0]["resultado"]["resumen"]["critica"] > 0, "debe revisar el código de la app")
         self.assertTrue(all(h.get("grupo") == "codigo" for h in tienda[0]["resultado"]["hallazgos"]))
         self.assertIn("5432", d["puertos_desde_internet"], "debe probar los puertos desde fuera")
+        self.assertNotIn("/opt/viejo", [a["ruta"] for a in d["apps"]], "no debe auditar copias que nada usa")
+        self.assertIn("/opt/viejo", d["apps_sin_uso"])
         self.assertEqual(set(g.glob("/tmp/auditoria-seguridad-*")), antes, "debe borrar la carpeta temporal")
 
     def test_ajuste_por_sondeo(self):
@@ -339,6 +351,58 @@ class PruebasBasesDeDatos(unittest.TestCase):
         self.assertNotIn("SuperClave2024", h)
         self.assertNotIn("Admin123!", h)
         self.assertIn("db.miempresa.com", h, "debe seguir mostrando a qué servidor apunta")
+
+
+class PruebasFalsosDictamenes(unittest.TestCase):
+    """Casos reales que daban diagnósticos falsos."""
+
+    def proyecto(self, archivos):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="proyecto-")
+        for ruta, contenido in archivos.items():
+            destino = os.path.join(tmp, ruta)
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            with open(destino, "w", encoding="utf-8") as f:
+                f.write(contenido)
+        r = subprocess.run([sys.executable, ESCANER, tmp, "--sin-red"], capture_output=True, text=True)
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        return json.loads(r.stdout)
+
+    def test_version_instalada_manda_sobre_package_json(self):
+        d = self.proyecto({"package.json": '{"dependencies":{"next":"15.1.4"}}', "middleware.ts": "export function middleware(){}",
+                           "node_modules/next/package.json": '{"name":"next","version":"15.5.23"}'})
+        self.assertFalse([h for h in d["hallazgos"] if h["regla"] == "DEPENDENCIA_VULNERABLE"],
+                         "la versión instalada (15.5.23) no es vulnerable")
+
+    def test_solo_package_json_queda_por_confirmar(self):
+        d = self.proyecto({"package.json": '{"dependencies":{"next":"15.1.4"}}'})
+        dep = [h for h in d["hallazgos"] if h["regla"] == "DEPENDENCIA_VULNERABLE"]
+        self.assertTrue(dep and all(h["confianza"] == "revisar" for h in dep))
+
+    def test_rls_con_esquemas(self):
+        d = self.proyecto({"package.json": '{"dependencies":{"@supabase/supabase-js":"2.45.0"}}',
+                           "supabase/migrations/1.sql": "create table raw.ventas (id int);\n"
+                                                         "create table \"public\".\"orders\" (id int);\n"
+                                                         "alter table raw.ventas enable row level security;\n"
+                                                         "alter table \"public\".\"orders\" force row level security;\n"})
+        self.assertFalse([h for h in d["hallazgos"] if "SIN_RLS" in h["regla"]])
+
+    def test_rls_dinamico_no_es_critico(self):
+        d = self.proyecto({"package.json": '{"dependencies":{"@supabase/supabase-js":"2.45.0"}}',
+                           "supabase/migrations/1.sql": "create table raw.ventas (id int);\ncreate table raw.stock (id int);\n"
+                                                         "DO $$ DECLARE t record; BEGIN FOR t IN SELECT tablename FROM pg_tables "
+                                                         "WHERE schemaname='raw' LOOP EXECUTE format('ALTER TABLE raw.%I ENABLE "
+                                                         "ROW LEVEL SECURITY', t.tablename); END LOOP; END $$;\n"})
+        rls = [h for h in d["hallazgos"] if "SIN_RLS" in h["regla"]]
+        self.assertEqual(len(rls), 1, "un solo aviso para verificar en la base, no uno crítico por tabla")
+        self.assertEqual(rls[0]["severidad"], "media")
+        self.assertEqual(rls[0]["confianza"], "revisar")
+
+    def test_postgres_propio_no_pide_rls(self):
+        d = self.proyecto({"package.json": '{"dependencies":{"pg":"8.13.1"}}',
+                           "db/001.sql": "\n".join("create table raw.t%d (id int);" % i for i in range(32))})
+        self.assertFalse([h for h in d["hallazgos"] if "RLS" in h["regla"]])
 
 
 if __name__ == "__main__":

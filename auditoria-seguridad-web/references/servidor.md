@@ -64,6 +64,11 @@ Antes de afirmar que hubo un ataque, confirma leyendo el detalle. Un minero llam
 
 ## Puertos y Docker
 
+### Antes de reportar un puerto: ¿es público?
+- **No es público:** escuchar en `127.0.0.1` o en una IP privada o de VPN (`10.x`, `172.16-31.x`, `192.168.x`, `100.64.x` de Tailscale, `10.8.0.1` de WireGuard). El escáner los lista en `inventario.puertos_red_privada` y no los reporta.
+- **Público:** solo `0.0.0.0`, `::`, `*` o la IP pública del servidor.
+- Si `puertos_desde_internet` dice `cerrado`, hoy no es alcanzable: como mucho es una mejora baja.
+
 ### BD_EXPUESTA / DOCKER_BD_PUBLICA
 - **Qué pasa:** PostgreSQL, MySQL, Redis o MongoDB se pueden alcanzar desde internet.
 - **Riesgo:** los bots buscan estas bases de datos todo el día. Prueban contraseñas, y en Redis o MongoDB muchas veces ni hace falta. Después roban los datos o los borran y piden rescate.

@@ -65,6 +65,16 @@ sudo python3 <ruta-del-skill>/scripts/escanear_servidor.py
 python3 <ruta-del-skill>/scripts/escanear.py /var/www/mi-tienda
 ```
 
+**Tres preguntas antes de dar cualquier dictamen sobre un VPS.** Un reporte con falsas alarmas hace que el alumno pierda tiempo y deje de confiar en el resto.
+
+1. **¿Está en uso?** `inventario.apps` dice qué carpetas usa algo en ejecución (contenedor, servicio, proceso, nginx o cron) y cuáles no (`en_uso: false`). Las copias viejas no son producción: no reportes sus fallas como si lo fueran. Menciónalas solo como "carpeta sin uso, puedes borrarla". `auditar_vps.py` ya las omite por defecto.
+2. **¿Está expuesto de verdad?** Un puerto que escucha en una IP privada o de VPN (10.x, 172.16-31.x, 192.168.x, WireGuard, Tailscale) aparece en `inventario.puertos_red_privada` y **no** está abierto a internet. Tampoco es abierto lo que `puertos_desde_internet` marca como `cerrado`. "Podría quedar expuesto si alguien cambia el firewall" es, como mucho, una mejora baja, nunca el problema principal.
+3. **¿Es la versión que corre?** El escáner prefiere la versión instalada (`node_modules`) a la de `package.json`. Si un hallazgo de versión quedó como `revisar`, o la app corre en Docker, compruébalo de solo lectura antes de afirmarlo. Por ejemplo: `docker exec <contenedor> node -p "require('next/package.json').version"`.
+
+Lo que no puedas confirmar no va en "Problemas encontrados" como hecho. Va en "Revisa tú a mano", con el comando o el lugar exacto para verificarlo.
+
+**RLS en el servidor.** Si el proyecto usa su propio PostgreSQL (no Supabase), no hables de RLS como hallazgo. Si es Supabase y el escáner dice que RLS se activa con un script dinámico, no afirmes que falta. Da la consulta para verificarlo en la base. Si el alumno ya te dijo que lo verificó, respétalo.
+
 **Al confirmar los hallazgos del servidor** usa `references/servidor.md`:
 - **Señales de compromiso** (minero, cron con `curl | sh`, `ld.so.preload`, usuario con UID 0): son lo primero del reporte. Confirma leyendo la evidencia antes de afirmar un ataque, porque un script propio del alumno en `/tmp` puede ser legítimo. Si es real, el reporte debe decir claramente que el servidor está comprometido y seguir el plan de esa guía.
 - **Puertos:** `desde_internet: "abierto"` confirma el problema; `"cerrado"` significa que lo bloquea otro firewall.

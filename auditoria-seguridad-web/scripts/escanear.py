@@ -424,13 +424,23 @@ class Escaner:
             return
         tablas = {}
         rls = set()
+        dinamico = False
+        nombre_tabla = r"(?:\"?(\w+)\"?\.)?\"?(\w+)\"?"  # esquema opcional: raw.ventas, "public"."orders"
+
+        def clave(esquema, tabla):
+            return "%s.%s" % ((esquema or "public").lower(), tabla.lower())
         for rel, c in sqls.items():
             limpio = re.sub(r"--[^\n]*", "", c)
-            for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?", limpio, re.I):
-                tablas.setdefault(m.group(1).lower(), (rel, self.linea_de(limpio, m.start())))
-            for m in re.finditer(r"alter\s+table\s+(?:only\s+)?(?:if\s+exists\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?\s+enable\s+row\s+level\s+security", limpio, re.I):
-                rls.add(m.group(1).lower())
-            for m in re.finditer(r"create\s+policy\s+(\"[^\"]+\"|\w+)\s+on\s+(?:\"?public\"?\.)?\"?(\w+)\"?([^;]*);", limpio, re.I | re.S):
+            for m in re.finditer(r"create\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?" + nombre_tabla, limpio, re.I):
+                tablas.setdefault(clave(m.group(1), m.group(2)), (rel, self.linea_de(limpio, m.start())))
+            for m in re.finditer(r"alter\s+table\s+(?:only\s+)?(?:if\s+exists\s+)?" + nombre_tabla +
+                                 r"\s+(?:enable|force)\s+row\s+level\s+security", limpio, re.I):
+                rls.add(clave(m.group(1), m.group(2)))
+            # RLS activado en bucle (EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', ...)):
+            # no se puede saber a qué tablas aplica leyendo el archivo.
+            if re.search(r"execute[^;]*enable\s+row\s+level\s+security|format\([^;]*enable\s+row\s+level\s+security", limpio, re.I | re.S):
+                dinamico = True
+            for m in re.finditer(r"create\s+policy\s+(\"[^\"]+\"|\w+)\s+on\s+(?:\"?\w+\"?\.)?\"?(\w+)\"?([^;]*);", limpio, re.I | re.S):
                 cuerpo = m.group(3).lower()
                 accion = re.search(r"\bfor\s+(all|select|insert|update|delete)\b", cuerpo)
                 accion = accion.group(1) if accion else "all"
@@ -442,12 +452,22 @@ class Escaner:
                                  rel, self.linea_de(limpio, m.start()), "policy %s ... (true)" % m.group(1),
                                  "Una política con 'true' no pide estar logueado ni ser dueño del dato. Con %s "
                                  "cualquiera puede ejecutar esa acción." % quien)
-        for t, (rel, linea) in tablas.items():
-            if t not in rls:
-                self.agregar(regla_sin_rls, "critica", "revisar",
-                             "La tabla '%s' no tiene activada la seguridad por filas (RLS)" % t, rel, linea, t,
-                             "Sin RLS, cualquiera con %s puede leer y modificar toda la tabla. Confírmalo en el panel "
-                             "por si se activó desde ahí." % quien)
+        sin_rls = [(t, rel, linea) for t, (rel, linea) in tablas.items() if t not in rls]
+        if dinamico and sin_rls:
+            # Hay RLS activado por script: no afirmar que faltan; pedir la verificación en la base.
+            self.agregar(regla_sin_rls, "media", "revisar",
+                         "No se pudo confirmar RLS en %d tablas (se activa con un script dinámico)" % len(sin_rls),
+                         sin_rls[0][1], None, ", ".join(t for t, _, _ in sin_rls[:8]),
+                         "Las migraciones activan RLS en un bucle, así que el archivo no dice a qué tablas. Verifícalo en la "
+                         "base: SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                         "WHERE c.relkind = 'r' AND NOT c.relrowsecurity AND n.nspname NOT IN ('pg_catalog','information_schema');")
+            return
+        for t, rel, linea in sin_rls:
+            self.agregar(regla_sin_rls, "critica", "revisar",
+                         "La tabla '%s' no tiene activada la seguridad por filas (RLS)" % t.replace("public.", ""), rel, linea,
+                         t.replace("public.", ""),
+                         "Sin RLS, cualquiera con %s puede leer y modificar toda la tabla. Confírmalo en el panel "
+                         "por si se activó desde ahí." % quien)
 
     # ------------------------------------------------------- bases de datos
     def detectar_bases(self):
@@ -896,6 +916,15 @@ class Escaner:
         return tuple(int(x) for x in m.groups()) if m else None
 
     def version_instalada(self, pkg):
+        instalado = os.path.join(self.raiz, "node_modules", pkg, "package.json")
+        if os.path.exists(instalado):
+            try:
+                with open(instalado, encoding="utf-8") as f:
+                    v = json.load(f).get("version")
+                if v:
+                    return v, "node_modules/%s (instalada)" % pkg
+            except Exception:
+                pass
         lock = os.path.join(self.raiz, "package-lock.json")
         if os.path.exists(lock):
             try:
@@ -918,8 +947,10 @@ class Escaner:
             vulnerable_mw = (ver < (12, 3, 5)) or ((13, 0, 0) <= ver < (13, 5, 9)) or \
                 ((14, 0, 0) <= ver < (14, 2, 25)) or ((15, 0, 0) <= ver < (15, 2, 3))
             usa_mw = any(k in self.archivos for k in ("middleware.ts", "middleware.js", "src/middleware.ts", "src/middleware.js"))
+            # Si solo sabemos lo que dice package.json, la versión real puede ser otra: se pide confirmar.
+            conf_ver = "revisar" if origen == "package.json" else "confirmado"
             if vulnerable_mw:
-                self.agregar("DEPENDENCIA_VULNERABLE", "critica" if usa_mw else "alta", "confirmado",
+                self.agregar("DEPENDENCIA_VULNERABLE", "critica" if usa_mw else "alta", conf_ver,
                              "Next.js %s permite saltarse el middleware (CVE-2025-29927)" % v, origen, None, "next@" + v,
                              "Un atacante puede saltarse las protecciones del middleware con una cabecera. Actualiza Next.js "
                              "a la última versión de tu rama (npm install next@latest)." +
@@ -929,7 +960,7 @@ class Escaner:
                           ((15, 3, 0), (15, 3, 6)), ((15, 4, 0), (15, 4, 8)), ((15, 5, 0), (15, 5, 7)),
                           ((16, 0, 0), (16, 0, 7))]
             if any(a <= ver < b for a, b in rangos_rce):
-                self.agregar("DEPENDENCIA_VULNERABLE", "critica", "confirmado",
+                self.agregar("DEPENDENCIA_VULNERABLE", "critica", conf_ver,
                              "Next.js %s tiene una vulnerabilidad de ejecución remota de código (React2Shell)" % v, origen,
                              None, "next@" + v,
                              "Un atacante puede ejecutar comandos en tu servidor. Actualiza Next.js de inmediato.")

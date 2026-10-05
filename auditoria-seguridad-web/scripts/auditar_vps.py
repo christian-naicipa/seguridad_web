@@ -97,6 +97,8 @@ def main():
     ap.add_argument("-p", "--puerto", help="puerto SSH (por defecto 22)")
     ap.add_argument("-i", "--llave", help="archivo de llave SSH")
     ap.add_argument("--app", action="append", default=[], help="carpeta de una app en el VPS (se puede repetir)")
+    ap.add_argument("--incluir-sin-uso", action="store_true",
+                    help="revisar también carpetas de apps que nada usa (por defecto se omiten)")
     ap.add_argument("--sin-sondeo", action="store_true", help="no probar los puertos desde esta computadora")
     ap.add_argument("--local", action="store_true", help=argparse.SUPPRESS)  # pruebas: ejecuta 'remoto' en local
     ap.add_argument("--args-servidor", default="", help=argparse.SUPPRESS)  # pruebas: --raiz/--simular
@@ -106,7 +108,8 @@ def main():
     args = ap.parse_args()
 
     con = Conexion(args.destino, args.puerto, args.llave, args.local)
-    salida = {"destino": args.destino, "servidor": None, "apps": [], "puertos_desde_internet": {}, "notas": []}
+    salida = {"destino": args.destino, "servidor": None, "apps": [], "apps_sin_uso": [], "puertos_desde_internet": {},
+              "notas": []}
     tmp = None
     try:
         code, out, err = con.run("echo conectado && id -u && command -v python3 || echo SIN_PYTHON", timeout=40)
@@ -156,7 +159,18 @@ def main():
             return salida
         salida["servidor"] = servidor
 
-        apps = args.app or servidor["inventario"].get("apps_detectadas", [])
+        if args.app:
+            apps = args.app
+        else:
+            detalle = servidor["inventario"].get("apps") or [{"ruta": r, "en_uso": None}
+                                                             for r in servidor["inventario"].get("apps_detectadas", [])]
+            # Solo lo que está en producción: copias viejas que nada usa dan diagnósticos falsos.
+            apps = [a["ruta"] for a in detalle if a["en_uso"] is True]
+            if not apps:
+                apps = [a["ruta"] for a in detalle if a["en_uso"] is not False]
+            if args.incluir_sin_uso:
+                apps += [a["ruta"] for a in detalle if a["en_uso"] is False]
+            salida["apps_sin_uso"] = [a["ruta"] for a in detalle if a["en_uso"] is False]
         if len(apps) > MAX_APPS:
             salida["notas"].append("Se encontraron %d apps; se revisaron las primeras %d. Usa --app para elegir." %
                                    (len(apps), MAX_APPS))

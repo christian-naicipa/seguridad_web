@@ -48,6 +48,20 @@ IGNORAR_DIRS = {"node_modules", ".git", ".next", "dist", "build", "vendor", "__p
                 ".local", ".config", ".vscode-server", ".cursor-server", "snap", ".nvm", ".pm2", ".docker", "go"}
 
 
+def es_red_privada(host):
+    """True si la IP solo es alcanzable en una red privada o VPN (10.x, 172.16-31.x, 192.168.x, WireGuard, Tailscale...)."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.is_unspecified or ip.is_loopback:
+        return False
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):  # Tailscale / CGNAT
+        return True
+    return ip.is_private or ip.is_link_local
+
+
 class Sistema:
     """Acceso al servidor: real o simulado (para pruebas)."""
 
@@ -126,8 +140,10 @@ class EscanerServidor:
         self.manuales = []
         self.notas = []
         self.omitidas = []
-        self.inv = {"sistema": {}, "puertos_publicos": [], "contenedores": [], "apps_detectadas": [],
-                    "llaves_ssh_autorizadas": [], "firewall": None}
+        self.inv = {"sistema": {}, "puertos_publicos": [], "puertos_red_privada": [], "contenedores": [],
+                    "apps_detectadas": [], "apps": [], "llaves_ssh_autorizadas": [], "firewall": None}
+        self.referencias = []      # rutas que algo en ejecución usa (contenedores, servicios, procesos, nginx, cron)
+        self.docker_visible = None
         self.firewall_activo = None
         self.ufw_permitidos = set()
         self.ufw_permite_todo = False
@@ -242,6 +258,11 @@ class EscanerServidor:
                 continue
             proc = re.search(r'users:\(\("([^"]+)"', linea)
             proc = proc.group(1) if proc else (partes[-1] if "/" in partes[-1] else "?")
+            if es_red_privada(host):
+                # Escucha solo en una red privada o VPN (p. ej. WireGuard 10.8.0.1): no es accesible desde internet.
+                if not any(x["puerto"] == puerto for x in self.inv["puertos_red_privada"]):
+                    self.inv["puertos_red_privada"].append({"puerto": puerto, "ip": host, "proceso": proc})
+                continue
             if puerto in vistos:
                 continue
             vistos[puerto] = proc
@@ -288,6 +309,9 @@ class EscanerServidor:
             nombre, imagen = partes[0], partes[1]
             puertos = partes[2] if len(partes) > 2 else ""
             self.inv["contenedores"].append({"nombre": nombre, "imagen": imagen, "puertos": puertos})
+            for m in re.finditer(r"(\d+\.\d+\.\d+\.\d+):(\d+)(?:-\d+)?->(\d+)", puertos):
+                if es_red_privada(m.group(1)) and not any(x["puerto"] == int(m.group(2)) for x in self.inv["puertos_red_privada"]):
+                    self.inv["puertos_red_privada"].append({"puerto": int(m.group(2)), "ip": m.group(1), "proceso": "docker " + nombre})
             vistos = set()
             for m in re.finditer(r"(0\.0\.0\.0|\[?::\]?):(\d+)(?:-(\d+))?->(\d+)", puertos):
                 host_p = int(m.group(2))
@@ -311,13 +335,20 @@ class EscanerServidor:
                                  "Docker se salta ufw. Si este panel debe ser público, que sea por HTTPS a través de nginx/Traefik y "
                                  "con login; si no, publícalo en 127.0.0.1 y entra por túnel SSH.", puerto=host_p)
         insp = self.s.cmd("docker_inspect", "docker inspect --format "
-                          "'{{.Name}}\t{{.HostConfig.Privileged}}\t{{range .Mounts}}{{.Source}};{{end}}' "
+                          "'{{.Name}}\t{{.HostConfig.Privileged}}\t{{range .Mounts}}{{.Source}};{{end}}\t"
+                          "{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' "
                           "$(docker ps -q) 2>/dev/null")
+        self.docker_visible = insp is not None
         for linea in (insp or "").strip().splitlines():
             partes = linea.split("\t")
             if len(partes) < 3:
                 continue
             nombre = partes[0].lstrip("/")
+            for fuente in partes[2].split(";"):
+                if fuente.startswith("/") and not fuente.startswith(("/var/lib/docker", "/var/run", "/run", "/proc", "/sys", "/dev")):
+                    self.referencias.append((fuente.rstrip("/"), "contenedor %s" % nombre))
+            if len(partes) > 3 and partes[3].startswith("/"):
+                self.referencias.append((partes[3].strip().rstrip("/"), "contenedor %s (docker compose)" % nombre))
             imagen = next((c["imagen"] for c in self.inv["contenedores"] if c["nombre"] == nombre), "")
             gestor = GESTORES_DOCKER.search(nombre + " " + imagen)
             if partes[1].strip().lower() == "true" and not gestor:
@@ -470,6 +501,7 @@ class EscanerServidor:
     # ------------------------------------------------- señales de compromiso
     def revisar_compromiso(self):
         ps = self.s.cmd("ps", ["ps", "-eo", "user:20,pid,pcpu,args", "--sort=-pcpu", "--no-headers"])
+        self._ps = ps or ""
         for linea in (ps or "").splitlines()[:400]:
             p = linea.split(None, 3)
             if len(p) < 4:
@@ -588,6 +620,47 @@ class EscanerServidor:
                 self.agregar("NGINX_VERSION", "baja", "confirmado", "nginx muestra su versión", "/etc/nginx/nginx.conf",
                              None, "Agrega 'server_tokens off;' para no facilitar a los bots buscar fallas de tu versión.")
 
+    # -------------------------------------------------- ¿qué apps están en uso?
+    def revisar_uso_de_apps(self):
+        """Marca cada carpeta de app como en uso o no, para no auditar copias viejas como si fueran producción."""
+        refs = list(self.referencias)
+        for unidad in self.s.glob("/etc/systemd/system/*.service") + self.s.glob("/lib/systemd/system/*.service"):
+            txt = self.s.leer(unidad) or ""
+            for m in re.finditer(r"^(?:WorkingDirectory|ExecStart)\s*=\s*-?(\S+)(.*)$", txt, re.M):
+                for ruta in re.findall(r"(/[\w./@-]+)", m.group(1) + m.group(2)):
+                    refs.append((ruta.rstrip("/"), "servicio %s" % unidad.split("/")[-1]))
+        for dump in ["/root/.pm2/dump.pm2"] + self.s.glob("/home/*/.pm2/dump.pm2"):
+            try:
+                for proc in json.loads(self.s.leer(dump) or "[]"):
+                    for k in ("pm_cwd", "pm_exec_path"):
+                        if isinstance(proc.get(k), str) and proc[k].startswith("/"):
+                            refs.append((proc[k].rstrip("/"), "PM2 %s" % proc.get("name", "")))
+            except ValueError:
+                pass
+        nginx = self.s.glob("/etc/nginx/sites-enabled/*") + self.s.glob("/etc/nginx/conf.d/*.conf") + ["/etc/nginx/nginx.conf"]
+        for c in nginx + self.s.glob("/etc/caddy/Caddyfile") + self.s.glob("/etc/apache2/sites-enabled/*"):
+            for m in re.finditer(r"^\s*(?:root|alias|DocumentRoot)\s+(?:\*\s+)?([^;\s]+)", self.s.leer(c) or "", re.M):
+                refs.append((m.group(1).strip().strip("\"'").rstrip("/"), "nginx (%s)" % c.split("/")[-1]))
+        for linea in (getattr(self, "_ps", "") or "").splitlines():
+            for ruta in re.findall(r"(/(?:var/www|opt|srv|home|root)/[\w./@-]+)", linea):
+                refs.append((ruta.rstrip("/"), "proceso en ejecución"))
+        for ruta in re.findall(r"(/(?:var/www|opt|srv|home|root)/[\w./@-]+)", getattr(self, "_cron_texto", "")):
+            refs.append((ruta.rstrip("/"), "tarea programada (cron)"))
+        se_pudo_ver = self.docker_visible is not False
+        apps = []
+        for app in self.inv["apps_detectadas"]:
+            usado = sorted({quien for ruta, quien in refs if ruta == app or ruta.startswith(app + "/")})
+            apps.append({"ruta": app, "en_uso": True if usado else (False if se_pudo_ver else None),
+                         "usado_por": usado[:5], "tiene_git": self.s.existe(app + "/.git")})
+        apps.sort(key=lambda a: {True: 0, None: 1, False: 2}[a["en_uso"]])
+        self.inv["apps"] = apps
+        self.inv["apps_detectadas"] = [a["ruta"] for a in apps]
+        sin_uso = [a["ruta"] for a in apps if a["en_uso"] is False]
+        if sin_uso:
+            self.notas.append("Carpetas de apps que nada usa (ningún contenedor, servicio, proceso, nginx ni cron): %s. "
+                              "No son lo que está en producción; si no las necesitas, bórralas para evitar confusiones."
+                              % ", ".join(sin_uso[:8]))
+
     # ------------------------------------------------------ bases de datos del VPS
     def revisar_bases_servidor(self):
         for hba in self.s.glob("/etc/postgresql/*/main/pg_hba.conf"):
@@ -675,7 +748,8 @@ class EscanerServidor:
     def ejecutar(self):
         for paso in (self.revisar_sistema, self.revisar_firewall, self.revisar_puertos, self.revisar_docker,
                      self.revisar_ssh, self.revisar_actualizaciones, self.revisar_usuarios, self.revisar_compromiso,
-                     self.revisar_apps_y_secretos, self.revisar_bases_servidor, self.revisar_backups_y_certificados):
+                     self.revisar_apps_y_secretos, self.revisar_uso_de_apps, self.revisar_bases_servidor,
+                     self.revisar_backups_y_certificados):
             try:
                 paso()
             except Exception as e:  # una revisión que falla no debe tumbar las demás
